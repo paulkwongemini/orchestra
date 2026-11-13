@@ -1,0 +1,14 @@
+{
+  "name": "orchestra",
+  "displayName": "Orchestra",
+  "version": "0.1.0",
+  "description": "A harness that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement.",
+  "author": {
+    "name": "paulkwongemini",
+    "url": "https://github.com/paulkwongemini"
+  },
+  "homepage": "https://github.com/paulkwongemini/orchestra",
+  "repository": "https://github.com/paulkwongemini/orchestra",
+  "license": "MIT",
+  "keywords": ["orchestration", "subagents", "harness"]
+}

@@ -1,0 +1,14 @@
+{
+  "name": "orchestra",
+  "description": "Marketplace for the orchestra plugin, served from the plugin's own repository",
+  "owner": {
+    "name": "paulkwongemini",
+    "url": "https://github.com/paulkwongemini"
+  },
+  "plugins": [
+    {
+      "name": "orchestra",
+      "source": "./"
+    }
+  ]
+}
