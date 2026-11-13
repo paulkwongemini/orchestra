@@ -4,6 +4,17 @@ A Claude Code plugin that keeps Fable in the conductor role. Fable designs, dele
 
 Orchestra chooses the model and effort for its Opus and Sonnet subagents. You set the Fable conductor's effort yourself using the control below the prompt input. Orchestra does not change the conductor's effort.
 
+## Objectives
+
+Orchestra sets the model and the effort level for each piece of work by Anthropic's official prompting guides for [Fable 5.2](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2), [Opus 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5), and [Sonnet 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5). It has two goals:
+
+- **Cut needless token use.** No task runs on a larger model or a higher effort level than it needs.
+- **Let each model do what it does best.** Fable understands what you want, designs, and reviews. Opus and Sonnet implement.
+
+## Workflow
+
+![The Orchestra workflow: you, Fable as the conductor, and an Opus or Sonnet subagent](docs/workflow.svg)
+
 ## Install
 
 Requirements: Claude Code 2.1.295 or later, and `python3`.

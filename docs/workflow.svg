@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 614" width="920" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">Orchestra workflow</title>
+  <desc id="d">You send a request. Fable, the conductor, understands the intent and writes a brief, which you confirm. Fable designs the approach, writes a task spec and picks the model and effort level, and delegates to an Opus or Sonnet subagent. Fable reviews the result independently, sends it back for rework up to two times, then integrates and reports to you.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M1.5 1.5 L8.5 5 L1.5 8.5" fill="none" stroke="#6E7781" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <rect x="0.5" y="0.5" width="919" height="613" rx="16" fill="#FFFFFF" stroke="#D8DEE4"/>
+
+  <rect x="24" y="24" width="252" height="566" rx="12" fill="#F6F8FA"/>
+  <rect x="290" y="24" width="340" height="566" rx="12" fill="#F3F0FF"/>
+  <rect x="644" y="24" width="252" height="566" rx="12" fill="#E8F6F0"/>
+
+  <text x="150" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#424A53">You</text>
+  <text x="460" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#4B3FB3">Fable</text>
+  <text x="460" y="80" text-anchor="middle" font-size="12" fill="#6F64C9">the conductor</text>
+  <text x="770" y="60" text-anchor="middle" font-size="15" font-weight="600" fill="#0F6E56">Opus or Sonnet</text>
+  <text x="770" y="80" text-anchor="middle" font-size="12" fill="#2B8A6E">a subagent</text>
+
+  <g fill="none" stroke="#6E7781" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#a)">
+    <path d="M240 130 H314"/>
+    <path d="M380 156 V210 H246"/>
+    <path d="M150 236 V290 H314"/>
+    <path d="M460 316 V338"/>
+    <path d="M600 370 H674"/>
+    <path d="M740 396 V438 H606"/>
+    <path d="M600 462 H810 V402" stroke-dasharray="5 5"/>
+    <path d="M460 476 V498"/>
+    <path d="M320 530 H246"/>
+  </g>
+
+  <g font-size="12" fill="#57606A" text-anchor="middle">
+    <text x="673" y="430">result</text>
+    <text x="725" y="482">rework, up to 2 times</text>
+  </g>
+
+  <g fill="#FFFFFF" stroke="#8C959F" stroke-width="1.2">
+    <rect x="60" y="104" width="180" height="52" rx="10"/>
+    <rect x="60" y="184" width="180" height="52" rx="10"/>
+    <rect x="60" y="504" width="180" height="52" rx="10"/>
+  </g>
+  <g fill="#FFFFFF" stroke="#7C6FE0" stroke-width="1.2">
+    <rect x="320" y="104" width="280" height="52" rx="10"/>
+    <rect x="320" y="264" width="280" height="52" rx="10"/>
+    <rect x="320" y="344" width="280" height="52" rx="10"/>
+    <rect x="320" y="424" width="280" height="52" rx="10"/>
+    <rect x="320" y="504" width="280" height="52" rx="10"/>
+  </g>
+  <rect x="680" y="344" width="180" height="52" rx="10" fill="#FFFFFF" stroke="#1D9E75" stroke-width="1.2"/>
+
+  <g text-anchor="middle" font-size="14" font-weight="600" fill="#1F2328">
+    <text x="150" y="135">Your request</text>
+    <text x="150" y="215">Confirm the brief</text>
+    <text x="150" y="535">The result</text>
+    <text x="460" y="126">Understand the intent</text>
+    <text x="460" y="286">Design the approach</text>
+    <text x="460" y="366">Write the task spec</text>
+    <text x="460" y="446">Review independently</text>
+    <text x="460" y="526">Integrate and report</text>
+    <text x="770" y="366">Implement</text>
+  </g>
+  <g text-anchor="middle" font-size="12" fill="#57606A">
+    <text x="460" y="144">and write the brief</text>
+    <text x="460" y="304">and split it into tasks</text>
+    <text x="460" y="384">and pick the model and effort level</text>
+    <text x="460" y="464">before reading the subagent's report</text>
+    <text x="460" y="544">what changed and what was verified</text>
+    <text x="770" y="384">by the task spec</text>
+  </g>
+</svg>
