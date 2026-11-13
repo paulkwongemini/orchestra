@@ -342,6 +342,12 @@ def in_reports(path, data):
     return unit is not None and bool(rest) and rest[0] == "reports"
 
 
+def in_files(path, data):
+    """True for anything inside a work folder's `files/` folder, where tasks keep working files."""
+    unit, rest = split_unit(path, data)
+    return unit is not None and bool(rest) and rest[0] == "files"
+
+
 def temp_roots(data):
     roots = {"/tmp", "/var/tmp", os.path.realpath(tempfile.gettempdir())}
     scratch = data.get("scratchpad_dir")

@@ -29,7 +29,8 @@ You cannot ask the user directly. Your question goes to the conductor.
 ## What you do not do
 
 - Do not start other subagents. If the task is too big, report `BLOCKED` and ask for it to be split.
-- Inside `.orchestra/`, write only your own report file. Do not edit the brief, the task specs, or the review records.
+- Inside `.orchestra/`, write only your own report file, and working files in the folder under `.orchestra/<work>/files/` that the task spec names. Do not edit the brief, the task specs, or the review records.
+- Inside `.orchestra/`, read only your task spec and the files it names. Do not read or search other reports, review records, or earlier work folders to look for conventions. A report is an unverified claim about work that may have been corrected or changed since, so take conventions from the code and the project's documents.
 - Change repository state, such as committing or pushing, only when the task spec explicitly tells you to.
 - Do not create or edit a document of the project, such as a README, a file under `docs/`, or an instruction file, unless the task spec names that file. Your own report is not one of these: always write it. If your change makes a statement in a document false, list the file and the statement under `## Found outside scope` in your report.
 - Write a comment only for a reason that belongs to that exact place and that the code cannot show. Do not write a comment that says what the code does or how it changed.

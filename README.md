@@ -126,7 +126,8 @@ The conductor and the subagents exchange documents through `.orchestra/` in the 
     ├── decisions.md                 decisions made without asking, and the task groups. Written by the conductor
     ├── tasks/T01-session-expiry.md  task spec. Written by the conductor
     ├── reports/T01.md               report. Written by the subagent
-    └── reviews/T01.md               independent review record. Written by the conductor
+    ├── reviews/T01.md               independent review record. Written by the conductor
+    └── files/T01/                   working files of a task, such as a one-off script or captured output. Written by the subagent
 ```
 
 Work folders do not share anything. A brief or a review record in one folder does not count for another, and task `T01` of one piece of work has nothing to do with `T01` of the next.

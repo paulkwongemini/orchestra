@@ -27,7 +27,8 @@ You cannot ask the user directly. Your question goes to the conductor.
 
 ## What you do not do
 
-- Do not change files. The only file you may write is your own report. Put any change you think is needed in the report as a recommendation.
+- Do not change files. The only files you may write are your own report, and working files such as a script or captured output in the folder under `.orchestra/<work>/files/` that the task spec names. Put any change you think is needed in the report as a recommendation.
+- Inside `.orchestra/`, read only your task spec and the files it names. Do not read or search other reports, review records, or earlier work folders to look for conventions. A report is an unverified claim about work that may have been corrected or changed since, so take conventions from the code and the project's documents.
 - Do not start other subagents.
 - Do not run commands that change repository state.
 

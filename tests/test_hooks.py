@@ -746,6 +746,7 @@ class GuardWriteTest(HookTest):
             (UNIT + "/tasks/T01-login-fix.md", "allow"),
             (UNIT + "/reviews/T01.md", "allow"),
             (UNIT + "/decisions.md", "allow"),
+            (UNIT + "/files/T01/notes.txt", "allow"),
             (UNIT + "/reports/T01.md", "deny"),
             (OTHER_UNIT + "/reports/T07.md", "deny"),
             (os.path.join(tempfile.gettempdir(), "orchestra-note.txt"), "allow"),
@@ -777,11 +778,17 @@ class GuardWriteTest(HookTest):
             self.assertEqual(self.write_verdict(self.sub(role, "Edit", {"file_path": UNIT + "/tasks/T01-login-fix.md"})), "deny", role)
             self.assertEqual(self.write_verdict(self.sub(role, "Write", {"file_path": UNIT + "/reviews/T01.md"})), "deny", role)
             self.assertEqual(self.write_verdict(self.sub(role, "Write", {"file_path": UNIT + "/brief.md"})), "deny", role)
+            self.assertEqual(self.write_verdict(self.sub(role, "Write", {"file_path": UNIT + "/files/T01/run.rb"})), "allow", role)
+            self.assertEqual(self.write_verdict(self.sub(role, "Edit", {"file_path": UNIT + "/files/T01/run.rb"})), "allow", role)
+            self.assertEqual(self.write_verdict(self.sub(role, "Write", {"file_path": UNIT + "/scratch/run.rb"})), "deny", role)
+            self.assertEqual(self.write_verdict(self.sub(role, "Write", {"file_path": ".orchestra/files/run.rb"})), "deny", role)
 
     def test_readonly_subagent(self):
         self.assertEqual(self.write_verdict(self.sub("opus-analyst", "Write", {"file_path": "src/app.py"})), "deny")
         self.assertEqual(self.write_verdict(self.sub("opus-analyst", "Write", {"file_path": UNIT + "/reports/T02.md"})), "allow")
         self.assertEqual(self.write_verdict(self.sub("opus-analyst", "Write", {"file_path": UNIT + "/brief.md"})), "deny")
+        self.assertEqual(self.write_verdict(self.sub("opus-analyst", "Write", {"file_path": UNIT + "/files/T02/fetch.rb"})), "allow")
+        self.assertEqual(self.write_verdict(self.sub("opus-analyst", "Write", {"file_path": UNIT + "/scratch/fetch.rb"})), "deny")
 
     def test_sessions_outside_the_harness_are_left_alone(self):
         self.set_transcript([request(SONNET), response(SONNET)])
@@ -928,6 +935,9 @@ class GuardBashTest(HookTest):
         self.assertEqual(run("rg -n TODO src"), "allow")
         self.assertEqual(run("sed -i 's/a/b/' src/app.py"), "deny")
         self.assertEqual(run("echo x > src/x.txt"), "deny")
+        self.assertEqual(run("ruby fetch.rb > %s/files/T02/out.jsonl" % UNIT), "allow")
+        self.assertEqual(run("cp src/app.py %s/files/T02/app.py" % UNIT), "allow")
+        self.assertEqual(run("ruby fetch.rb > %s/brief.md" % UNIT), "deny")
         self.assertEqual(run('git commit -m "x"'), "ask")
         self.assertEqual(run("claude -p x"), "deny")
 
@@ -1035,6 +1045,12 @@ class ReportGateTest(HookTest):
         self.write(self.REPORT, REPORT_DONE)
         self.set_transcript([request(OPUS), response(OPUS)])
         self.assertEqual(self.read(), "allow")
+
+    def test_task_files_are_not_gated(self):
+        self.write(UNIT + "/files/T01/out.txt", "x\n")
+        self.assertEqual(self.read(UNIT + "/files/T01/out.txt"), "allow")
+        payload = self.main("Grep", {"pattern": "x", "path": UNIT + "/files"})
+        self.assertEqual(self.verdict("report_gate.py", payload), "allow")
 
     def test_grep_in_reports_is_denied(self):
         self.write(self.REPORT, REPORT_DONE)

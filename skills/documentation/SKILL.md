@@ -13,7 +13,7 @@ These rules decide what this work writes down outside the code, and when.
 
 Reason: when every related task is done, a document statement is rewritten once, against the code as it now is. The subagents that implement do not have to judge documents.
 
-The rules cover the project's own documents and comments: README files, files under `docs/`, instruction files such as `CLAUDE.md`, plans and specs kept in the repository, and comments in the code.
+The rules cover the project's own documents and comments: README files, files under `docs/`, instruction files such as `AGENTS.md` or `CLAUDE.md`, plans and specs kept in the repository, and comments in the code.
 
 They do not cover:
 

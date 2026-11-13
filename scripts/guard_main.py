@@ -4,8 +4,10 @@
 Principle 8  The conductor does not implement.
   - Conductor (the main conversation of a session on a Fable model): writes only its own
     documents inside `.orchestra/`. It does not change files from the shell.
-  - Read-only subagents: write only their own report.
-  - Implementation subagents: inside `.orchestra/`, write only their own report.
+  - Read-only subagents: write only their own report and working files under
+    `.orchestra/<work>/files/`.
+  - Implementation subagents: inside `.orchestra/`, write only their own report and working
+    files under `.orchestra/<work>/files/`.
   - The main conversation of a session on any other model is left alone.
 Principle 3  Commands that change repository state, dependencies, or external
              services go to the user for confirmation.
@@ -172,13 +174,13 @@ def conductor_may_write(path, data):
 
 def readonly_may_write(path, data):
     if c.inside(path, c.project_dir(data)):
-        return c.in_reports(path, data)
+        return c.in_reports(path, data) or c.in_files(path, data)
     return any(c.inside(path, root) for root in c.temp_roots(data))
 
 
 def impl_may_write(path, data):
     if c.inside(path, c.work_dir(data)):
-        return c.in_reports(path, data)
+        return c.in_reports(path, data) or c.in_files(path, data)
     return True
 
 
@@ -808,14 +810,16 @@ def handle_write(path_text, data, role):
         if readonly_may_write(path, data):
             c.allow()
         c.deny(
-            "You cannot edit `%s`. %s The only file you may write is your own report in "
-            "`.orchestra/<work>/reports/`." % (path_text, WHY["readonly"])
+            "You cannot edit `%s`. %s The only files you may write are your own report in "
+            "`.orchestra/<work>/reports/` and the working files of your task under "
+            "`.orchestra/<work>/files/`." % (path_text, WHY["readonly"])
         )
     if impl_may_write(path, data):
         c.allow()
     c.deny(
         "Inside `.orchestra/`, a subagent may write only its own report in "
-        "`.orchestra/<work>/reports/`. The brief, the task specs, and the review records belong "
+        "`.orchestra/<work>/reports/` and the working files of its task under "
+        "`.orchestra/<work>/files/`. The brief, the task specs, and the review records belong "
         "to the conductor."
     )
 

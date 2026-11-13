@@ -30,7 +30,8 @@ You cannot ask the user directly. Your question goes to the conductor.
 
 - Do not start other subagents.
 - Do not edit files that the task spec does not name. Do not change code.
-- Inside `.orchestra/`, write only your own report file.
+- Inside `.orchestra/`, write only your own report file, and working files in the folder under `.orchestra/<work>/files/` that the task spec names.
+- Inside `.orchestra/`, read only your task spec and the files it names. Do not read or search other reports, review records, or earlier work folders to look for conventions. A report is an unverified claim about work that may have been corrected or changed since, so take conventions from the code and the project's documents.
 
 ## Completion status
 

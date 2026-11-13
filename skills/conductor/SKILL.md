@@ -23,7 +23,8 @@ Each piece of work gets its own folder under `.orchestra/`, named with the date 
 ├── decisions.md            decisions you made without asking
 ├── tasks/T01-short-name.md task specs
 ├── reports/T01.md          reports, written by subagents
-└── reviews/T01.md          your independent review records
+├── reviews/T01.md          your independent review records
+└── files/                  working files of tasks, written by subagents
 ```
 
 When you continue earlier work, for example after the conversation was compacted or in a new session, find its folder first. Read the brief, see which tasks already have a report and a review record and which task groups the decision log shows as closed, and carry on from there.
@@ -56,6 +57,10 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - Before the first delegation, write one line per group in the decision log: `- [G1] T01, T02, T03. What the group delivers.` When you add a task later, add it to its group's line.
 - Write a task spec for each task under `.orchestra/<work>/tasks/`. Name the file `T01-short-name.md`. `T01` is the task ID.
 - Implementation tasks do not edit the project's documents. Each group's document changes are made once, when the group is closed (step 7). Follow `orchestra:documentation` for what an implementation task spec says about comments.
+- When a task produces files that are neither project files nor its report, such as a script that is run once, captured data, or the output of a command, name a folder for them under `.orchestra/<work>/files/` in the task spec, for example `files/T03/`. Inside `.orchestra/`, the harness lets a subagent write only there and in `reports/`. Do not put them under `reports/`, where the harness keeps you from reading before your review, or in a temporary folder.
+  Reason: these files are the record of what was run. They have to outlast the session, and you have to be able to read them.
+- A subagent reads nothing under `.orchestra/` except its task spec and the files that spec names. Whatever a task needs from earlier work, write into `## Context` yourself: state the fact as you confirmed it in your review, and for a convention, name the code file that shows it. Do not name a report or a review record as a file to read. The one exception is an `orchestra:opus-analyst` report whose conclusions you have confirmed; say in the task spec which conclusions to rely on.
+  Reason: a report is the subagent's account before your review. A later subagent that reads it takes over its mistakes and treats one-off choices as conventions.
 
 ### 3. Delegate
 
