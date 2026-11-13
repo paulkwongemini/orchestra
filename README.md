@@ -73,6 +73,7 @@ The commands apply to the chat you type them in. Only you can turn the mode on o
 | Kind | Name | Role |
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
+| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. Fable loads it before it asks you anything. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
@@ -87,7 +88,7 @@ The enforcement below applies in a conductor session.
 | Principle | Enforcement | File |
 |---|---|---|
 | 1. Fable is the orchestrator | Instructions | `skills/conductor/SKILL.md` |
-| 2. Understand the intent before working | Instructions. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
+| 2. Understand the intent before working | Instructions (`skills/interview/SKILL.md`): one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
 | 3. Stop and ask when an exception comes up | Instructions. Commands that change repository state, dependencies, or external services go to the user | `scripts/guard_main.py` |
 | 4. Subagents use Opus or Sonnet, with model and effort chosen by the delegation rules | Agent types off the roster and `haiku` are refused. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a delegation | `scripts/guard_agent.py` |
 | 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |

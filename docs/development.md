@@ -46,6 +46,8 @@ The conductor cannot decide on its own that it has understood the intent, so the
 
 The check does not read what the user said. When a session has no record of the user speaking, the check is skipped.
 
+The interview that leads to the brief is a skill of its own, `orchestra:interview`. No hook checks that it is loaded or that a turn holds one question. The user chose to run it by instruction alone first.
+
 ## How DONE reports are checked
 
 `scripts/check_report.py` checks both `SubagentHandback` and `SubagentStop`. Every roster agent returning `DONE` must put a fenced JSON object under `## What I verified` in its report. The object has a nonempty `checks` list and an empty `unverified` list. Each check names its `criterion`, `kind`, `method`, `result`, and `evidence`. All results must be `PASS`. A `command` check also needs an integer `exit_code` of `0`; a `manual` check records the comparison and evidence required by the task spec. The agent files contain complete examples.
@@ -80,7 +82,7 @@ A record of what was checked and how. Update it when a check is added or repeate
   - A rework round: the conductor sent the task back to the same subagent, reviewed the new result, wrote a new review record, and then read the new report.
   - A model switch: a Fable session continued on Sonnet could write files, and a Sonnet session continued on Fable could not.
 - **Turning the mode off and on, in a real Fable session.** After `/orchestra:disable`, Fable wrote a file itself. After `/orchestra:enable` in the same session, the same edit was refused. `/orchestra:conductor` after a disable is covered by the test suite only.
-- **The brief's confirmation, in a real Fable session.** Told "do not ask me anything", Fable wrote the brief and delegated in the same turn, and the delegation was refused. After a second prompt that confirmed the brief, the same delegation went through. Not exercised in a real session: an answer to `AskUserQuestion` counting as the confirmation. The test suite covers it.
+- **The brief's confirmation, in a real Fable session.** Told "do not ask me anything", Fable wrote the brief and delegated in the same turn, and the delegation was refused. After a second prompt that confirmed the brief, the same delegation went through. An answer to `AskUserQuestion` counted as the confirmation in a real session in the desktop app on 2026-11-13.
 - **Loading the skill, in a real Fable session.** Asked what a file says, Fable loaded the skill first and then read the file. After `/compact` in the same session, it loaded the skill again before its next tool call. In a session told "do not load any skill", the Read call was refused, and Fable stopped and reported that instead of loading the skill.
 - **The hand-back tool, in a real Fable session in auto mode.** The subagent delivered its last message through the `SubagentHandback` tool, with the text in the tool input's `message` field, which is the field the hook reads. The hook accepted it and recorded the task, and the conductor reviewed and then read the report as usual. Not exercised in a real session: a hand-back in the wrong format being refused. The test suite covers it.
 - **Proposed extras, in a real Fable session.** In a small repository with two near-identical report modules, asked to add a third, Fable listed two extras in the brief (a shared module, and tests) with reasons and with what happens if each is dropped, named them in its last question, and changed no code. Not exercised: the implementation after the answer, and a review that fails a change outside the task's scope.
@@ -89,3 +91,4 @@ A record of what was checked and how. Update it when a check is added or repeate
 - **About hook input, in real sessions.** At the first tool call of a session, a hook can read the model of the request from the transcript. `SessionStart` does not carry the model. `PostModelSwitch` carries the old and the new model when a session is resumed.
 - **By the test suite.** Every verdict of every hook script.
 - **By the plugin tools.** The plugin and its marketplace file validate, and the plugin installs from a marketplace.
+- **The interview skill.** Not exercised in a real session: one question per turn, the next question following from the answer, the brief written only after the last answer, and the brief opened in a side pane.

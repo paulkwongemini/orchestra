@@ -34,17 +34,14 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 
 ### 1. Understand the intent
 
-Do not stop at the literal request. Keep going until it is clear what the user actually wants.
+**REQUIRED SUB-SKILL:** Use `orchestra:interview` to find out what the user wants. Load it with the Skill tool when a request produces a deliverable, before you ask the user anything or write the brief. If its full text is no longer in the current context, load it again before the next interview.
 
-- First find out what you can find out yourself. Read the codebase, and search the web when that helps.
-- Ask the user about what investigation cannot answer. Collect your questions and ask them together. Use the question tool (AskUserQuestion) if it is available.
-- Write what you learned in `.orchestra/<work>/brief.md`.
-- Then always ask the same last question, whatever the user said about asking: "Do you want me to wait until you confirm the brief?" Say in one or two lines what you understood, name any extras the brief proposes, give the path of the brief, and offer two options: start now, or review the brief first. When investigation left you nothing else to ask, this is the only question.
+- Do not stop at the literal request. Keep going until it is clear what the user actually wants.
+- Ask one question per turn. Decide each next question from the last answer.
+- Write `.orchestra/<work>/brief.md` only after the interview is over.
+- Then show the brief and always ask the same last question, alone in its turn, whatever the user said about asking: "Do you want me to wait until you confirm the brief?" When the interview left you nothing to ask, this is the only question.
   Reason: you cannot tell on your own that you have understood the intent. Only the user can say so.
-- If they choose to start, delegate. If they choose to review, show the brief and wait for their confirmation.
-- The harness refuses the delegation until the user has replied after the brief last changed, so write the brief before you ask the last question. If you change the brief later, ask the last question again.
-
-A good brief lets you make most later decisions the way the user would.
+- The harness refuses the delegation until the user has replied after the brief last changed. If you change the brief later, ask the last question again.
 
 ### 2. Design and decompose
 
