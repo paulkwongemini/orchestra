@@ -170,11 +170,13 @@ class HookTest(unittest.TestCase):
         os.makedirs(self.proj)
         os.makedirs(self.state)
         # By default a test runs in a new session on Fable that has just sent its first request,
-        # and the delegation rules are already loaded.
+        # and the delegation rules and the documentation rules are already loaded.
         self.set_transcript([request(FABLE)])
         self.rules = os.path.join(self.state, "sessions", "session-1.delegation")
+        self.doc_rules = os.path.join(self.state, "sessions", "session-1.documentation")
         os.makedirs(os.path.dirname(self.rules))
         open(self.rules, "w").close()
+        open(self.doc_rules, "w").close()
 
     # ---- helpers
 
@@ -470,6 +472,56 @@ class DelegationRulesTest(HookTest):
         self.assertEqual(self.delegate(), "allow")
         self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "compact"})
         self.assertEqual(self.delegate(), "deny")
+
+    def test_ordinary_session_is_left_alone(self):
+        self.set_transcript([request(SONNET)])
+        self.assertEqual(self.delegate(), "allow")
+
+
+class DocumentationRulesTest(HookTest):
+    """An implementation delegation waits until the documentation rules are loaded."""
+
+    PROMPT = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % UNIT
+
+    def setUp(self):
+        super().setUp()
+        os.remove(self.doc_rules)
+        self.write(UNIT + "/brief.md", BRIEF)
+        self.write(UNIT + "/tasks/T01-login-fix.md", TASK)
+
+    def delegate(self, name="sonnet-builder"):
+        return self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "orchestra:" + name, "prompt": self.PROMPT}))
+
+    def skill(self, name):
+        return self.verdict("require_skill.py", self.main("Skill", {"skill": name}))
+
+    def test_implementation_is_refused_until_the_rules_are_loaded(self):
+        self.skill("orchestra:conductor")
+        for name in ("sonnet-builder", "opus-engineer", "sonnet-writer"):
+            self.assertEqual(self.delegate(name), "deny", name)
+        self.assertEqual(self.skill("orchestra:documentation"), "allow")
+        for name in ("sonnet-builder", "opus-engineer", "sonnet-writer"):
+            self.assertEqual(self.delegate(name), "allow", name)
+
+    def test_analysis_does_not_wait_for_the_rules(self):
+        self.assertEqual(self.delegate("opus-analyst"), "allow")
+
+    def test_rules_cannot_be_loaded_before_the_conductor_skill(self):
+        self.assertEqual(self.skill("orchestra:documentation"), "deny")
+        self.assertEqual(self.delegate(), "deny")
+
+    def test_compaction_requires_loading_the_rules_again(self):
+        self.set_transcript([request(FABLE), response(FABLE)])
+        self.skill("orchestra:conductor")
+        self.skill("delegation")
+        self.skill("documentation")
+        self.assertEqual(self.delegate(), "allow")
+        self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "compact"})
+        self.skill("orchestra:conductor")
+        self.skill("delegation")
+        self.assertEqual(self.delegate(), "deny")
+        self.skill("documentation")
+        self.assertEqual(self.delegate(), "allow")
 
     def test_ordinary_session_is_left_alone(self):
         self.set_transcript([request(SONNET)])

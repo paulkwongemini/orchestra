@@ -109,7 +109,8 @@ def main():
     again = data.get("source") in ("compact", "clear")
     if again:
         c.mark_loaded(data, False)  # the instructions have to be loaded again
-        c.mark_loaded(data, False, c.DELEGATION_SKILL)
+        for sub_skill in c.SUB_SKILLS:
+            c.mark_loaded(data, False, sub_skill)
     if c.is_disabled(data):
         c.allow()
     known = c.main_model_is_fable(data)

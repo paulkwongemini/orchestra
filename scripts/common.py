@@ -13,6 +13,9 @@ WORKDIR = ".orchestra"
 TAG = "[orchestra] "
 CONDUCTOR_SKILL = PLUGIN + ":conductor"
 DELEGATION_SKILL = PLUGIN + ":delegation"
+DOCUMENTATION_SKILL = PLUGIN + ":documentation"
+# Skills the conductor loads on top of its instructions. A hook waits for each one.
+SUB_SKILLS = (DELEGATION_SKILL, DOCUMENTATION_SKILL)
 
 # The subagent roster.
 #   impl     = produces a result. The conductor reviews the result independently

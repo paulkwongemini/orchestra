@@ -6,6 +6,7 @@ Principle 4  No model below Sonnet.
 Principle 5  No subagent runs on Fable. A fork counts.
 Principle 6  A subagent cannot start other subagents.
 Principle 9  Every delegation goes through a task spec.
+Principle 11 No implementation is delegated before the documentation rules are loaded.
 
 The main-conversation rules apply only in a conductor session, which is a session whose
 model is a Fable model.
@@ -138,8 +139,16 @@ def main():
             "loaded yet (Principle 4). Invoke the `%s` skill with the Skill tool, choose by its "
             "rules, and then delegate." % c.DELEGATION_SKILL
         )
+    impl = c.ROSTER[name]["kind"] == "impl"
+    if impl and not c.is_loaded(data, c.DOCUMENTATION_SKILL):
+        c.deny(
+            "Decide what this task does to the project's documents and comments by the "
+            "documentation rules, which are not loaded yet (Principle 11). Invoke the `%s` skill "
+            "with the Skill tool, check the task spec against its rules, and then delegate."
+            % c.DOCUMENTATION_SKILL
+        )
     unit = check_task_spec(data, ti.get("prompt"))
-    if c.ROSTER[name]["kind"] == "impl":
+    if impl:
         check_brief(data, unit)
     c.allow()
 

@@ -28,6 +28,16 @@ The rules are a skill and not a file beside the conductor skill, because a sessi
 
 The rules come from Anthropic's prompting guides for Claude Opus 5.5 and Claude Sonnet 5.5 and from the effort documentation. The default effort of `opus-engineer` is `medium`, the level those guides recommend to start from.
 
+## How the documentation rules are connected
+
+The rules for documents and comments are a skill of their own, `orchestra:documentation`, connected the same way as the delegation rules. `scripts/require_skill.py` records when it is loaded, and `scripts/guard_agent.py` refuses an implementation delegation until then. A delegation to `opus-analyst` does not wait for it, because an analysis changes no document. Compaction and `/clear` drop the record.
+
+The conductor splits the work into task groups, and the document changes of a group are made once, in a docs task, when every task of the group has passed review. `opus-engineer` and `sonnet-builder` are told in their agent files not to edit a document unless the task spec names the file. No hook enforces that, because a hook cannot tell a document from a text file that is the product: in this repository the skills and the agent files are Markdown.
+
+The hook checks only that the rules are loaded. Whether a group is closed before the final report, and whether a review ran the comment and document checks, is left to the conductor.
+
+The conductor's instructions do not use the ownership sentence from "Say who owns the code" in Anthropic's prompting guide for Claude Fable 5.2. That guide measured 70 to 80 percent more output tokens with it, and changes nobody had asked for, many of them new tests and documentation. Both work against what this plugin is for.
+
 ## How the brief's confirmation is checked
 
 A hook records the time whenever the user speaks in the main conversation: on every prompt (`UserPromptSubmit`), and when the user answers a question (`PostToolUse` of `AskUserQuestion`). When the conductor delegates implementation, the brief must not be newer than that time. A brief that was written or changed after the user last spoke cannot have been confirmed, so the delegation is refused.
@@ -60,6 +70,7 @@ claude plugin validate .
 A record of what was checked and how. Update it when a check is added or repeated.
 
 - **DONE verification records, by the hook tests on 2026-11-12.** All 112 tests passed on 2026-11-13, including the tests for missing or invalid verification records, failed or unrun checks, command exit codes, manual evidence, text around the JSON block, unfinished statuses, the retry limit on invalid `DONE` claims, and reports changed after handback. The plugin validator passed with an icon-missing warning. The new verification-record format has not yet been exercised in a real model session.
+- **The documentation rules, by the hook tests on 2026-11-13.** All 117 tests passed, including the tests for an implementation delegation refused until `orchestra:documentation` is loaded, an analysis delegation that does not wait for it, and the record dropped by compaction. Not exercised in a real session: the conductor loading the skill before its first task spec, the task groups in the decision log, the close of a group with and without a docs task, and the comment and document checks in a review.
 - **In real sessions, with Claude Code 2.1.322 in the terminal.** The same request, "create a file", went to a Sonnet session and to a Fable session with the plugin loaded.
   - The Sonnet session wrote the file itself. The plugin did not interfere.
   - The Fable session loaded the conductor skill first, wrote a brief and a task spec, and delegated to `orchestra:sonnet-builder`. The subagent returned only the status lines. The conductor ran its own checks, wrote the review record, and then read the report.

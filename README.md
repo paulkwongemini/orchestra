@@ -1,6 +1,6 @@
 # orchestra
 
-A Claude Code plugin that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
+A Claude Code plugin that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement. As the work goes on, Fable keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
 
 Orchestra chooses the model and effort for its Opus and Sonnet subagents. You set the Fable conductor's effort yourself using the control below the prompt input. Orchestra does not change the conductor's effort.
 
@@ -42,7 +42,7 @@ claude --plugin-dir /path/to/orchestra
 
 After you install the plugin, the model of a chat decides its mode.
 
-- **The model is Fable: conductor mode.** Fable works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself.
+- **The model is Fable: conductor mode.** Fable works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself. Each time a group of related tasks is done, it has the project's documents brought up to date.
 - **The model is anything else: ordinary mode.** The plugin does nothing.
 
 Change the model in the middle of a chat, and the mode changes with it.
@@ -74,10 +74,11 @@ The commands apply to the chat you type them in. Only you can turn the mode on o
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
+| Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
 | Subagent | `orchestra:opus-analyst` | Opus, effort high. Architecture review, deep analysis. Read-only |
 | Subagent | `orchestra:sonnet-builder` | Sonnet, effort medium. Simple code, repetitive work |
-| Subagent | `orchestra:sonnet-writer` | Sonnet, effort medium. Documents whose structure is already decided |
+| Subagent | `orchestra:sonnet-writer` | Sonnet, effort medium. Documents whose structure is already decided, including the document changes at the close of a task group |
 
 ## Principles and how each is enforced
 
@@ -95,8 +96,22 @@ The enforcement below applies in a conductor session.
 | 8. The conductor waits for delegated work instead of doing it | Instructions. The conductor's Edit, Write, and file-changing shell commands are refused. The shell check catches the common ways to change a file and sends the work back to delegation. It is not a sandbox | `skills/conductor/SKILL.md`, `scripts/guard_main.py` |
 | 9. Every delegation goes through a task spec | Delegation is refused without a task spec file that has the required sections | `scripts/guard_agent.py` |
 | 10. Failed work goes back to the subagent | Instructions. A reworked report needs a new review record before it opens | `scripts/report_gate.py` |
+| 11. Documents and comments hold only what the code cannot show. Documents are brought up to date each time a group of related tasks is done, not by the subagents that implement | Instructions (`skills/documentation/SKILL.md`), which must be loaded before an implementation delegation. Whether a group is closed is not checked by a hook | `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `scripts/guard_agent.py` |
 
 Principle 8 is about patience, not about a waiting mode. Subagents usually run in the background, and the conductor ends its turn and resumes when one of them reports. However long that takes, the conductor does not take the work back. The hooks leave it unable to change project files, so the plugin needs no extra setting for this.
+
+## Documents and comments
+
+Every document in a project costs context in each later session that reads it, and an agent trusts a document that is out of date. So the conductor keeps the documents small and true. The work spends some tokens on this, and later work spends fewer on finding out what is still correct.
+
+- **The reason for the code is in the code.** A reader should understand it from the code itself.
+- **Other text has to pass one test.** Without this text, would a capable reader who has only the code make a wrong decision? If not, it is not written. A fact passes only when it came from outside the code: you said it, something was measured, or an outside system behaved that way.
+- **Each fact has one place.** A reason that belongs to one place in the code is a short comment there. A fact with no one place, such as what the product is for, a constraint from outside the code, or a plan, goes in a document. What changed and why is left to git.
+- **A document says what is true now.** A statement that the work makes false is rewritten, not added to. A plan or a spec that the work has implemented is deleted.
+- **Documents are updated once per task group.** The conductor splits the work into groups of related tasks. When every task of a group has passed review, it works out what the group made false or unnecessary and delegates those changes as one task. The subagents that implement do not edit documents.
+- **Only what the work caused.** A document that was already out of date, a new document, and the removal of a whole file are extras. The conductor proposes them and does not make them on its own.
+
+The test is not applied to documents for people who do not read the code, such as a user guide, or to a history the project keeps on purpose, such as a changelog. The full rules are in `skills/documentation/SKILL.md`.
 
 ## Work folder
 
@@ -107,7 +122,7 @@ The conductor and the subagents exchange documents through `.orchestra/` in the 
 ├── .gitignore                       keeps the folder out of git
 └── 2026-11-12-login-fix/            one folder per piece of work
     ├── brief.md                     the intent confirmed with the user. Written by the conductor
-    ├── decisions.md                 decisions made without asking. Written by the conductor
+    ├── decisions.md                 decisions made without asking, and the task groups. Written by the conductor
     ├── tasks/T01-session-expiry.md  task spec. Written by the conductor
     ├── reports/T01.md               report. Written by the subagent
     └── reviews/T01.md               independent review record. Written by the conductor

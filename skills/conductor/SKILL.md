@@ -26,7 +26,7 @@ Each piece of work gets its own folder under `.orchestra/`, named with the date 
 └── reviews/T01.md          your independent review records
 ```
 
-When you continue earlier work, for example after the conversation was compacted or in a new session, find its folder first. Read the brief, see which tasks already have a report and a review record, and carry on from there.
+When you continue earlier work, for example after the conversation was compacted or in a new session, find its folder first. Read the brief, see which tasks already have a report and a review record and which task groups the decision log shows as closed, and carry on from there.
 
 The harness keeps `.orchestra/` out of git by default. Whether to commit it is the user's decision.
 
@@ -48,13 +48,17 @@ A good brief lets you make most later decisions the way the user would.
 
 ### 2. Design and decompose
 
+**REQUIRED SUB-SKILL:** Use `orchestra:documentation` for everything this work does to the project's documents and comments. Load it with the Skill tool before you write the first task spec in a session. The harness refuses an implementation delegation until you have. If its full text is no longer in the current context, load it again before you close a task group.
+
 - You own the design of this work, and you answer for how the code looks after it. The structure and the approach are your call.
 - While you design, look for existing code that this work would duplicate and for code it can reuse. When consolidating is the better design, plan it.
 - A change the user did not ask for is an extra: a consolidation, a refactor, a related fix, new tests or documentation beyond what the work needs. List each extra with its reason under `## Proposed extras` in the brief, so the user sees it before it happens and can drop it. Put an extra into a task spec only after the user has had the brief with that extra in it.
   Reason: the user wants better-structured code, but not changes they never heard about.
 - An extra that you find after the work has started is not done in this work. Note it and offer it in the final report.
-- Split the work into tasks that one subagent can finish. Split it so that no two tasks edit the same file at the same time.
+- Split the work on two levels. A **task** is what one subagent can finish. A **task group** is a set of tasks that change the same part of the system and are only complete together. Small work is one group. Split it so that no two tasks edit the same file at the same time.
+- Before the first delegation, write one line per group in the decision log: `- [G1] T01, T02, T03. What the group delivers.` When you add a task later, add it to its group's line.
 - Write a task spec for each task under `.orchestra/<work>/tasks/`. Name the file `T01-short-name.md`. `T01` is the task ID.
+- Implementation tasks do not edit the project's documents. Each group's document changes are made once, when the group is closed (step 7). Follow `orchestra:documentation` for what an implementation task spec says about comments.
 
 ### 3. Delegate
 
@@ -82,7 +86,7 @@ Reason: if you read the report first, you look at the result through its explana
 
 A subagent writes its full report to `.orchestra/<work>/reports/` and returns only a status, a list of changed files, and the report path. Work in this order:
 
-1. Review the result on its own. Read the diff, run the tests and verification commands yourself, and check each acceptance criterion in the task spec. Compare the diff with the task spec's scope. A change outside the scope fails the review, however small it is.
+1. Review the result on its own. Read the diff, run the tests and verification commands yourself, and check each acceptance criterion in the task spec. Compare the diff with the task spec's scope. A change outside the scope fails the review, however small it is. Apply the review checks of `orchestra:documentation` to the diff.
 2. Write the review record at `.orchestra/<work>/reviews/T01.md`.
 3. Then read the report at `.orchestra/<work>/reports/T01.md` with the Read tool. The harness refuses to open it until the review record exists.
 4. Compare the report's claims with your own findings. Where they disagree, your review wins. Where the report claims something you did not check, check it.
@@ -101,9 +105,17 @@ Do not fix a result that failed verification. Send it back.
 - **Limit**: two rounds of rework per task. If it still fails, stop and report to the user: what you tried, where it is stuck, and the options.
 - Review a reworked result in full, the same way as the first time, and write a new review record.
 
-### 7. Integrate and report
+### 7. Close the task group
 
-- When every task has passed review, confirm that the pieces work together, and check the result against the acceptance criteria in the brief.
+A task group is ready to close when every task in it has passed review. Close it then. Do not leave the closing of several groups for the end of the work.
+Reason: with all the related changes in place, each document statement is rewritten once, against the code as it now is.
+
+- Do the document work for the group as `orchestra:documentation` describes. It ends in a docs task that you delegate and review like any other task, or in one line in the decision log that says no document needed a change.
+- A group's docs task can run while tasks of another group run, when they edit different files.
+
+### 8. Integrate and report
+
+- When every group is closed, confirm that the pieces work together, and check the result against the acceptance criteria in the brief.
 - Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do.
 
 ## When to ask the user
@@ -212,6 +224,8 @@ Pass or fail. On a fail, which acceptance criteria were not met.
 ### Decision log: `.orchestra/<work>/decisions.md`
 
 One line per decision made without asking. Format: `- [T01] The decision. The reason.`
+
+The task groups are in the same file: `- [G1] T01, T02, T03. What the group delivers.` when you decompose, and `- [G1] Closed. ...` when you close the group.
 
 ### The last message a subagent returns
 
