@@ -90,6 +90,7 @@ Work often runs while you are away, so the conductor settles in the interview wh
 - A key counts once you have replied after the brief last changed, and it holds for that piece of work only.
 - Your project's instructions come first. The conductor does not ask you to pre-approve an action they forbid, and a procedure they require around an action, such as a check before a commit, still applies.
 - A data command that names a production environment is not covered by `data`. You are always asked.
+- Commands that change git state, a push included, are run by the conductor only. Subagents use git only to read. See "Working in one directory".
 
 When a command's kind is not pre-approved:
 
@@ -100,12 +101,30 @@ When a command's kind is not pre-approved:
 
 The check reads the command line and is a tripwire for the common commands, not a sandbox. It does not look inside a container: a command run through `docker exec` is checked only for data and schema changes.
 
+## Working in one directory
+
+Subagents work in your working directory, several at a time, with no worktree between them. Results need no merging, and every task sees the current code. The conductor keeps the tasks out of each other's way with five rules:
+
+- **Each task owns its files.** A task spec lists the files or directories the task may edit, and the subagent edits nothing else.
+- **One writer per file.** A file belongs to one task until that task has passed review. Two tasks that need the same file run one after the other.
+- **A task that depends on another waits for it.** That includes tasks in different files that share an agreement, such as a type, an interface, a schema, or a dependency version. A task that changes the database, the dependencies, or build output runs alone.
+- **Only the conductor changes git state.** It commits, switches, resets, and pushes itself, when no subagent that edits files is running. Subagents use git only to read.
+- **Whole-tree checks wait for a quiet tree.** A task that runs beside another checks only its own files. The full test suite, a build, or a type check is run by the conductor when no subagent is editing, so a result is never taken from a tree that was changing.
+
+The conductor does not use a worktree unless you approve one for that piece of work:
+
+- When your project's instructions forbid worktrees, it does not consider one and does not ask.
+- Otherwise it asks in the interview, and only when the work needs two states of the tree at the same moment, such as comparing two commits side by side. Two tasks that want the same file, or tasks that would finish sooner side by side, are run one after the other instead.
+- Your answer is written under `## Constraints` in the brief.
+
+These rules are instructions. No hook enforces them.
+
 ## What is in it
 
 | Kind | Name | Role |
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
-| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work. Fable loads it before it asks you anything. No hook checks this |
+| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, and whether the work may use a worktree when it needs one. Fable loads it before it asks you anything. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
@@ -130,6 +149,7 @@ The enforcement below applies in a conductor session.
 | 9. Every delegation goes through a task spec | Delegation is refused without a task spec file that has the required sections | `scripts/guard_agent.py` |
 | 10. Failed work goes back to the subagent | Instructions. A reworked report needs a new review record before it opens | `scripts/report_gate.py` |
 | 11. Documents and comments hold only what the code cannot show. Documents are brought up to date each time a group of related tasks is done, not by the subagents that implement | Instructions (`skills/documentation/SKILL.md`), which must be loaded before an implementation delegation. Whether a group is closed is not checked by a hook | `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `scripts/guard_agent.py` |
+| 12. Subagents share one working directory without damaging each other's work, and no worktree is used without your approval | Instructions: each task owns its files, one writer per file, dependent tasks run in order, only the conductor changes git state, and whole-tree checks run only when no subagent is editing. No hook checks these | `skills/conductor/SKILL.md`, `skills/interview/SKILL.md`, `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `agents/sonnet-writer.md` |
 
 Principle 8 is about patience, not about a waiting mode. Subagents usually run in the background, and the conductor ends its turn and resumes when one of them reports. However long that takes, the conductor does not take the work back. The hooks leave it unable to change project files, so the plugin needs no extra setting for this.
 

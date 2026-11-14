@@ -12,7 +12,7 @@ The interview ends in a brief that lets you make later decisions the way the use
 
 - Before any question, read the codebase and the project's documents, and search the web when that helps.
 - A fact is something the environment can settle. A decision is something only the user can settle. Never ask the user for a fact. Never answer a decision for the user.
-- Work out which kinds of action the work will need that the harness stops unless the brief pre-approves them: changing data or a schema, changing dependencies, changing git state, pushing, changing things on GitHub, writing to another machine over HTTP, using ssh, deploying. Count the commands your own review will run, such as a migration or a seed to check a result, or installing dependencies to run the tests. Read what the project's instruction files, such as `AGENTS.md` and `CLAUDE.md`, say about each of these actions.
+- Work out which kinds of action the work will need that the harness stops unless the brief pre-approves them: changing data or a schema, changing dependencies, changing git state, pushing, changing things on GitHub, writing to another machine over HTTP, using ssh, deploying. Count the commands your own review will run, such as a migration or a seed to check a result, or installing dependencies to run the tests. Read what the project's instruction files, such as `AGENTS.md` and `CLAUDE.md`, say about each of these actions, and about worktrees.
 - Scale the effort to the request. For a small request, this can take a minute and leave nothing to ask.
 
 ## 2. Lay out the decisions as a tree
@@ -49,7 +49,18 @@ The work often runs while the user is away. An action that the brief does not pr
 
 Reason: only the user can give this permission, and the interview is the last moment they are sure to be present.
 
-## 6. When to stop asking
+## 6. Settle whether the work uses a worktree
+
+The default is no worktree: every subagent works in the user's working directory. The conductor's instructions say under "Working in one directory" when a worktree is needed.
+
+- When the project's instructions forbid worktrees, do not consider one and do not ask. Put the rule under `## Constraints` and design the work without it. If the work cannot be done without one, tell the user that the two conflict.
+- When the work does not need one, do not ask. Write `Worktrees: not used.` under `## Constraints`.
+- When the work needs one, ask. Say which part of the work needs it, why running the tasks one after the other does not do it, and what changes if the user says no. Write the answer under `## Constraints`: what the worktree is approved for, or that none is used.
+- Never write an approval as an assumption. If the user ends the interview before this is settled, the work uses no worktree.
+
+Reason: the user decides whether a second checkout is worth what it costs, and the interview is the moment to ask.
+
+## 7. When to stop asking
 
 - Stop when every decision still open is one you may make: an implementation detail inside the scope, easy to undo. The test is the one in the conductor's instructions under "When to ask the user".
 - Write each of those decisions into the brief as an assumption, under the heading it belongs to, so the user can see it and change it.
@@ -57,13 +68,13 @@ Reason: only the user can give this permission, and the interview is the last mo
 
 Reason: every question costs the user a turn. A question whose answer would not change the design or the acceptance criteria is not worth one.
 
-## 7. Write the brief
+## 8. Write the brief
 
 - Write `.orchestra/<work>/brief.md` only now, after the last answer. Do not write it while questions are still open.
 - Its format is in the conductor's instructions under "Document formats". Write it in the user's language.
 - A good brief lets you make most later decisions the way the user would.
 
-## 8. Show the brief and ask the last question
+## 9. Show the brief and ask the last question
 
 - If a tool that shows a file to the user is available (in the Claude desktop app, the one that opens a file in a side pane), open the brief with it. If there is none, give the path of the brief.
 - In the chat, write two or three lines: what will be built, the assumptions you made without asking, any extras the brief proposes, and which kinds of action the brief pre-approves. Do not paste the brief.

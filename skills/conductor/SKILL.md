@@ -54,7 +54,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - A change the user did not ask for is an extra: a consolidation, a refactor, a related fix, new tests or documentation beyond what the work needs. List each extra with its reason under `## Proposed extras` in the brief, so the user sees it before it happens and can drop it. Put an extra into a task spec only after the user has had the brief with that extra in it.
   Reason: the user wants better-structured code, but not changes they never heard about.
 - An extra that you find after the work has started is not done in this work. Note it and offer it in the final report.
-- Split the work on two levels. A **task** is what one subagent can finish. A **task group** is a set of tasks that change the same part of the system and are only complete together. Small work is one group. Split it so that no two tasks edit the same file at the same time.
+- Split the work on two levels. A **task** is what one subagent can finish. A **task group** is a set of tasks that change the same part of the system and are only complete together. Small work is one group. Split and order the tasks by the rules under "Working in one directory".
 - Before the first delegation, write one line per group in the decision log: `- [G1] T01, T02, T03. What the group delivers.` When you add a task later, add it to its group's line.
 - Write a task spec for each task under `.orchestra/<work>/tasks/`. Name the file `T01-short-name.md`. `T01` is the task ID.
 - Implementation tasks do not edit the project's documents. Each group's document changes are made once, when the group is closed (step 7). Follow `orchestra:documentation` for what an implementation task spec says about comments.
@@ -70,7 +70,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - For **every task**, apply that skill's full decision procedure before its initial delegation, in order, and satisfy its task-spec requirements. Apply it again for the second rework round, using the current task spec and review history. Loading the skill once does not replace making these decisions for each task.
 - Before dispatch, record the choice and its model and effort grounds in the decision log, as required by `orchestra:delegation`.
 - Start the selected subagent with the Agent tool. Always put the path of the task spec in the prompt, for example: "Read the task spec at `.orchestra/2026-11-12-login-fix/tasks/T01-session-expiry.md` and carry it out."
-- Delegate tasks that do not depend on each other in the same message.
+- Delegate in the same message the tasks that may run together under "Working in one directory".
 
 ### 4. Wait for the results
 
@@ -89,7 +89,7 @@ Reason: if you read the report first, you look at the result through its explana
 
 A subagent writes its full report to `.orchestra/<work>/reports/` and returns only a status, a list of changed files, and the report path. Work in this order:
 
-1. Review the result on its own. Read the diff, run the tests and verification commands yourself, and check each acceptance criterion in the task spec. Compare the diff with the task spec's scope. A change outside the scope fails the review, however small it is. Apply the review checks of `orchestra:documentation` to the diff.
+1. Review the result on its own. Read the diff, run the tests and verification commands yourself, and check each acceptance criterion in the task spec. Compare the diff with the task spec's scope. A change outside the scope fails the review, however small it is. Apply the review checks of `orchestra:documentation` to the diff. While another implementation subagent is running, run only the checks that read this task's own files, and leave the rest to the gate. See "Working in one directory".
 2. Write the review record at `.orchestra/<work>/reviews/T01.md`.
 3. Then read the report at `.orchestra/<work>/reports/T01.md` with the Read tool. The harness refuses to open it until the review record exists.
 4. Compare the report's claims with your own findings. Where they disagree, your review wins. Where the report claims something you did not check, check it.
@@ -118,8 +118,37 @@ Reason: with all the related changes in place, each document statement is rewrit
 
 ### 8. Integrate and report
 
-- When every group is closed, confirm that the pieces work together, and check the result against the acceptance criteria in the brief.
+- When every group is closed, run the gate one last time, with no subagent running, to confirm that the pieces work together. Then check the result against the acceptance criteria in the brief.
 - Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do.
+
+## Working in one directory
+
+All subagents work in the user's working directory, at the same time, with nothing between them. These rules keep one task from damaging another.
+
+- **Each task owns its files.** Under `## Scope and limits`, every task spec lists by path the files or directories the task may edit. A task edits nothing else.
+- **One writer per file.** A file belongs to one task from the delegation until that task passes review, rework included. Before you delegate a task, compare its list with the list of every task that has not passed review. When two tasks need the same file, run them one after the other.
+- **A task that depends on another waits for it.** Delegate it after the other has passed review. Tasks in different files still depend on each other when they share an agreement: a type, the shape of an interface, a schema, a dependency version, a configuration key. Decide the agreement yourself and write it into both task specs, or run the tasks one after the other. A task that changes what the others run on, such as the database, the dependencies, a lockfile, or build output, runs with no other implementation task.
+- **Only you change git state.** Commit, stash, checkout, switch, restore, reset, clean, merge, rebase, and push are yours, and you run them only when no implementation subagent is running. Do not write one into a task spec. Subagents use git only to read.
+  Reason: one such command in a shared directory can remove the unfinished work of every other task. And a commit that you make is a commit of reviewed work.
+- **A check counts only when the files it reads were not changing while it ran.**
+  - A task that runs alongside another gets acceptance commands that read only its own files, such as its own test file.
+  - While another implementation subagent is running, your review runs only such checks too.
+  - Checks that read the whole tree, such as the full test suite, a build, or a type check, are the gate. Run the gate yourself at a moment when no implementation subagent is running. Make that moment each time the tasks that ran together have all passed review, before you delegate what comes next, and once more before the final report. Write one line in the decision log with the commands and the result.
+  - When the gate fails, find the task whose change causes the failure and send it back as that task's rework. Then run the gate again.
+
+  Reason: a test that ran while another task was editing passed or failed on a tree that no longer exists. A false failure sends the wrong task to rework.
+
+### Worktrees
+
+Do not use a worktree unless the brief records the user's approval of one for this work. This covers the Agent tool's worktree isolation, `git worktree add`, and any other way to get a second checkout.
+
+- When the project's instructions forbid worktrees, do not consider one and do not ask for one. Design the work without it.
+- A worktree is not the answer to two tasks that want the same file, or to tasks that would finish sooner side by side. Run them one after the other.
+- A worktree is needed only when the work needs two states of the tree at the same moment and no ordering of tasks gives that: comparing the behavior of two commits side by side, or keeping a long process running on an unchanged tree while the code is edited. Settle it in the interview, as `orchestra:interview` describes.
+- If the need first shows after the work has started, stop the affected tasks and ask the user. Record the answer in the brief.
+- With an approval, use the worktree only for what the brief names. Bringing its result back into the working directory changes git state, so you do it.
+
+Reason: one directory needs no merge step and shows every task the current code. A worktree gives that up, so the user decides when it is worth it.
 
 ## When to ask the user
 
@@ -168,7 +197,7 @@ The harness stops eight kinds of command. The brief can pre-approve each kind fo
 
 No key includes another. Write `Pre-approved: none` when nothing is pre-approved.
 
-- A key counts only while the user has replied since the brief last changed, the same condition as for delegating. It counts for you and for the implementation subagents. A read-only subagent never runs these commands.
+- A key counts only while the user has replied since the brief last changed, the same condition as for delegating. It counts for you and for the implementation subagents, with one exception: the commands of `git` and `push` are run by you alone. See "Working in one directory". A read-only subagent never runs these commands.
 - A key lets a command through. It does not decide that the command is right. Run only what the work needs, against the target the brief means.
 - Pre-approval never overrides the project's own instructions. An action they forbid stays forbidden. A procedure they require around an action, such as a check before a commit, still applies.
   Reason: the user wrote those instructions for every session. A line in one brief does not change them.
@@ -180,7 +209,7 @@ When you need a kind of action that is not pre-approved:
 - For `data`, `deps` and `git`, the harness refuses the command. Add the key to the line in the brief, tell the user what will run and why, and ask them to confirm it. Run the command again after they answer. If they say no, remove the key and ask the fixed last question again, because the brief changed.
 - For `push`, `github`, `http`, `ssh` and `deploy`, the harness opens a confirmation prompt, and your turn does not continue until the user answers it. Before you run such a command, finish or delegate everything that does not depend on it.
 - In both cases, carry on with the work that does not depend on the answer.
-- A subagent that is refused one of these commands reports `BLOCKED`. Handle it the same way: get the key confirmed, then send the subagent on.
+- A subagent that is refused one of these commands reports `BLOCKED`. Handle it the same way: get the key confirmed, then send the subagent on. When a subagent reports that its task needs a git change, run the command yourself when no implementation subagent is running, then send the subagent on.
 - A command the harness cannot read is refused. Run it again as simpler, separate commands.
 
 Reason: the user is often away while the work runs. A question that the interview could have settled stops the work until they come back.
@@ -227,6 +256,8 @@ Pre-approved: none
 
 The `Pre-approved:` line lists the keys from "Pre-approved actions" that the user approved in the interview, or `none`.
 
+Under `## Constraints`, one line says whether this work uses a worktree: `Worktrees: not used.`, or what the user approved one for.
+
 ### Task spec: `.orchestra/<work>/tasks/T01-short-name.md`
 
 ```markdown
@@ -234,7 +265,7 @@ The `Pre-approved:` line lists the keys from "Pre-approved actions" that the use
 What must be different when this task is done, and why the overall work needs it.
 
 ## Scope and limits
-What may be touched and what must not be.
+The files or directories this task may edit, listed by path. What must not be touched.
 
 ## Context
 Decisions already made, conventions to follow, file paths to read.
@@ -269,6 +300,8 @@ Pass or fail. On a fail, which acceptance criteria were not met.
 One line per decision made without asking. Format: `- [T01] The decision. The reason.`
 
 The task groups are in the same file: `- [G1] T01, T02, T03. What the group delivers.` when you decompose, and `- [G1] Closed. ...` when you close the group.
+
+Each run of the gate is a line too: `- [Gate] T01, T02. The commands run and the result.`
 
 ### The last message a subagent returns
 

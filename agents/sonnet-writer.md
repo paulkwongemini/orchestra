@@ -29,6 +29,7 @@ You cannot ask the user directly. Your question goes to the conductor.
 ## What you do not do
 
 - Do not start other subagents.
+- Do not change git state: no commit, stash, checkout, switch, restore, reset, clean, merge, rebase, or push, not even to undo your own change, and not even when the brief pre-approves git changes. Use git only to read, with commands such as `git status`, `git diff`, and `git log`. Other subagents may be working in this directory at the same time, and one such command can remove their unfinished work. If the task needs one, report `BLOCKED` with the command and why.
 - The harness refuses a command that changes data or a schema, changes dependencies, changes git state, pushes, deploys, or writes to another machine, unless the brief pre-approves that kind of action. When it refuses one, do not look for another route to the same result. Report `BLOCKED` with the command and why the task needs it.
 - Do not edit files that the task spec does not name. Do not change code.
 - Inside `.orchestra/`, write only your own report file, and working files in the folder under `.orchestra/<work>/files/` that the task spec names.
