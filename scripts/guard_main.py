@@ -9,8 +9,20 @@ Principle 8  The conductor does not implement.
   - Implementation subagents: inside `.orchestra/`, write only their own report and working
     files under `.orchestra/<work>/files/`.
   - The main conversation of a session on any other model is left alone.
-Principle 3  Commands that change repository state, dependencies, or external
-             services go to the user for confirmation.
+Principle 3  Commands that change data, dependencies, repository state, or external
+             services run only when the user agreed to their kind of action in advance: the
+             work's brief lists it on the `Pre-approved:` line under `## Decision rights`, and
+             the user has spoken since the brief last changed. The brief is the one in the
+             session's active work folder, the folder whose brief the conductor last read or
+             wrote, or for which it last delegated a task.
+  - Conductor: data, dependency and git changes that are not pre-approved are refused, with
+    the way to get them approved. Pushes, GitHub changes, writing requests to other hosts, ssh
+    and deployments that are not pre-approved go to the user for confirmation. A data command
+    that names a production environment always goes to the user.
+  - Implementation subagents: a command of these kinds that is not pre-approved is refused,
+    and the subagent reports BLOCKED. Data commands that name production are always refused.
+  - Read-only subagents: commands of these kinds are always refused.
+  A command the harness cannot read is refused for the conductor and read-only subagents.
 Principles 5 and 6  No role starts a new session with the claude CLI.
 
 The shell check is a tripwire for the common paths. It is not a sandbox.
@@ -37,10 +49,12 @@ WHY = {
     ),
 }
 ASK_GIT = "This git command changes repository state, so the user has to confirm it (Principle 3)."
-ASK_PKG = "This command changes dependencies or installed packages, so the user has to confirm it (Principle 3)."
 ASK_OUT = "This command reaches outside this machine or is hard to undo, so the user has to confirm it (Principle 3)."
 ASK_DATA = "This command looks like it changes data or a schema, so the user has to confirm it (Principle 3)."
-ASK_PARSE = "The harness could not parse this command, so it cannot tell whether it is safe. The user has to confirm it."
+DENY_PARSE = (
+    "The harness could not read this command, so it cannot tell whether it is safe. Run it again "
+    "as simpler, separate commands."
+)
 DENY_CLAUDE = (
     "Starting a new session with the claude CLI is not allowed (Principles 5 and 6). Delegate "
     "only through the Agent tool and the roster subagents."
@@ -100,6 +114,38 @@ RISKY = re.compile(
     re.I,
 )
 
+PRODUCTION = re.compile(
+    r"(?<![\w])(?:RAILS_ENV|RACK_ENV|NODE_ENV|APP_ENV|DJANGO_ENV)=[\"']?(?:production|prod)(?!\w)"
+    r"|(?<![\w-])(?:-e|--env|--environment)(?:\s+|=)[\"']?(?:production|prod)(?!\w)",
+    re.I,
+)
+
+KINDS = {
+    "data": "changes data or a schema",
+    "deps": "changes dependencies or installed packages",
+    "git": "changes repository state with git",
+    "push": "pushes commits to a remote",
+    "github": "creates or changes something on GitHub",
+    "http": "sends a request that writes to another host",
+    "ssh": "connects to another machine",
+    "deploy": "changes a deployment or publishes an image",
+}
+# A confirmation prompt stops the conductor's whole turn until the user answers; in a real
+# overnight session four of them held the work for almost seven hours. A refusal returns at
+# once, so the conductor puts the question to the user itself and keeps working on what does
+# not depend on it. The outward kinds keep the prompt, because the user's answer to it is the
+# explicit permission for that one command.
+CONDUCTOR_REFUSED = {"data", "deps", "git"}
+DATA_TEXT_ONLY = (
+    "If the command only searches for, prints or writes text that names such a command, do that "
+    "with the Grep, Read or Write tool instead, without the text on a command line. That needs no "
+    "pre-approval."
+)
+GIT_FILES_DIRECTLY = (
+    "To restore, move or delete a file in the working tree, change the file directly, without git."
+)
+ASK_FOR = {"push": ASK_GIT, "github": ASK_OUT, "http": ASK_OUT, "ssh": ASK_OUT, "deploy": ASK_OUT}
+
 GIT_READONLY = {
     "status", "diff", "log", "show", "blame", "annotate", "grep", "ls-files", "ls-tree", "ls-remote",
     "rev-parse", "rev-list", "describe", "shortlog", "cat-file", "merge-base", "reflog", "whatchanged",
@@ -154,6 +200,29 @@ GH_MUT = {
     "label": {"create", "edit", "delete", "clone"},
 }
 
+# Only options known to take a value belong here: a word taken for a value is not checked as a URL.
+CURL_SHORT_VALUE = set("AbcCdDeEFHKmoPQrtTuUwxXyYz")
+CURL_LONG_VALUE = {
+    "--abstract-unix-socket", "--alt-svc", "--aws-sigv4", "--cacert", "--capath", "--cert",
+    "--cert-type", "--ciphers", "--config", "--connect-timeout", "--connect-to", "--continue-at",
+    "--cookie", "--cookie-jar", "--create-file-mode", "--data", "--data-ascii", "--data-binary",
+    "--data-raw", "--data-urlencode", "--dns-servers", "--dump-header", "--etag-compare",
+    "--etag-save", "--expect100-timeout", "--form", "--form-string", "--header", "--hsts",
+    "--interface", "--json", "--key", "--key-type", "--limit-rate", "--local-port", "--max-filesize",
+    "--max-redirs", "--max-time", "--netrc-file", "--noproxy", "--oauth2-bearer", "--output",
+    "--output-dir", "--pass", "--preproxy", "--proxy", "--proxy-header", "--proxy-user", "--quote",
+    "--range", "--referer", "--request", "--request-target", "--resolve", "--retry", "--retry-delay",
+    "--retry-max-time", "--socks4", "--socks4a", "--socks5", "--socks5-hostname", "--speed-limit",
+    "--speed-time", "--stderr", "--time-cond", "--trace", "--trace-ascii", "--unix-socket",
+    "--upload-file", "--url", "--url-query", "--user", "--user-agent", "--variable", "--write-out",
+}
+# With any of these, the URLs on the command line do not show where the request goes.
+CURL_ELSEWHERE = {
+    "-x", "--proxy", "--preproxy", "--socks4", "--socks4a", "--socks5", "--socks5-hostname",
+    "--resolve", "--connect-to", "-K", "--config", "-L", "--location", "--location-trusted",
+}
+_URL = re.compile(r"^(?:([A-Za-z][A-Za-z0-9+.\-]*)://)?(?:[^@/?#]*@)?(\[[^\]/?#]*\]|[^:/?#]*)(?::\d*)?(?:[/?#].*)?$", re.S)
+
 
 # ---------------------------------------------------------------- where each role may write
 
@@ -184,10 +253,110 @@ def impl_may_write(path, data):
     return True
 
 
+class Approval:
+    """What the brief in the session's active work folder pre-approves.
+
+    state: `no-work` (no active work folder), `no-brief`, `no-turn` (no user turn recorded),
+    `newer` (the brief changed after the user last spoke), or `confirmed`.
+    """
+
+    def __init__(self, unit, listed, state):
+        self.unit = unit
+        self.listed = listed
+        self.state = state
+        self.keys = listed if state == "confirmed" else set()
+
+    @property
+    def shown(self):
+        return "`.orchestra/%s/brief.md`" % os.path.basename(self.unit) if self.unit else "`.orchestra/<work>/brief.md`"
+
+
+def brief_approval(data):
+    unit = c.active_work(data)
+    if unit is None:
+        return Approval(None, set(), "no-work")
+    brief = os.path.join(unit, "brief.md")
+    if not os.path.isfile(brief):
+        return Approval(unit, set(), "no-brief")
+    listed = c.preapproved_keys(c.read_text(brief))
+    # Read the time after the text, so a change in between counts as unconfirmed.
+    try:
+        changed = os.path.getmtime(brief)
+    except OSError:
+        return Approval(unit, set(), "no-brief")
+    turn = c.last_user_turn(data)
+    # Stricter than check_brief in guard_agent.py, which lets a brief through when no user turn
+    # is recorded. A pre-approved action runs with nobody present to confirm it, so it must not
+    # be approved because a record is missing.
+    if turn is None:
+        return Approval(unit, listed, "no-turn")
+    if changed > turn:
+        return Approval(unit, listed, "newer")
+    return Approval(unit, listed, "confirmed")
+
+
 class Ctx:
     def __init__(self, data, role):
         self.data = data
         self.role = role
+        self._approval = None
+
+    @property
+    def approval(self):
+        if self._approval is None:
+            self._approval = brief_approval(self.data)
+        return self._approval
+
+    def category(self, key, production=False):
+        """The verdict on a command of one pre-approval category, for this role."""
+        kind = "This command %s, which the pre-approval key `%s` covers" % (KINDS[key], key)
+        text_only = " " + DATA_TEXT_ONLY if key == "data" else ""
+        if self.role == "readonly":
+            return ("deny", "This subagent is read-only, and a read-only subagent does not run a command "
+                            "that %s. Put the command in your report as a recommendation.%s"
+                            % (KINDS[key], text_only))
+        if production:
+            if self.role == "conductor":
+                return ("ask", ASK_DATA + " It names a production environment, which the `data` key "
+                                          "does not cover.")
+            return ("deny", "This command %s and names a production environment, which no pre-approval "
+                            "covers.%s Do not look for another way to run the data command itself. "
+                            "Report `BLOCKED` with the command and why the task needs it."
+                            % (KINDS[key], text_only))
+        if key in self.approval.keys:
+            return None
+        if self.role == "impl":
+            if key == "git":
+                return ("deny", "%s. The work's brief does not pre-approve it. %s Report `BLOCKED` only "
+                                "when the task needs the git command itself, with the command and why "
+                                "the task needs it." % (kind, GIT_FILES_DIRECTLY))
+            target = "the data command itself" if key == "data" else "it"
+            return ("deny", "%s. The work's brief does not pre-approve it.%s Do not look for another way "
+                            "to run %s. Report `BLOCKED` with the command and why the task needs it."
+                            % (kind, text_only, target))
+        if key in CONDUCTOR_REFUSED:
+            return ("deny", "%s (Principle 3).%s %s" % (kind, text_only, self.conductor_refusal(key)))
+        return ("ask", "%s It is pre-approved when the brief's `Pre-approved:` line lists `%s`."
+                       % (ASK_FOR[key], key))
+
+    def conductor_refusal(self, key):
+        a = self.approval
+        ask_user = ("ask them, and run the command again after they answer. Meanwhile, carry on with "
+                    "the work that does not depend on the answer.")
+        add_key = ("add `%s` to the `Pre-approved:` line under `## Decision rights` in the brief, tell "
+                   "the user what will run and why, " % key) + ask_user
+        if a.state == "no-work":
+            return ("This session has no active work folder, so no brief pre-approves it. Read or write "
+                    "the work's brief %s first. If it does not pre-approve `%s`, %s" % (a.shown, key, add_key))
+        if key in a.listed and a.state == "newer":
+            return ("The brief %s lists `%s`, but it was written or changed after the user last spoke, "
+                    "so the user has not confirmed this version of the brief. Show the user the change "
+                    "and tell them what will run and why, " % (a.shown, key)) + ask_user
+        if key in a.listed and a.state == "no-turn":
+            return ("The brief %s lists `%s`, but no user turn is recorded for this session, so the "
+                    "user has not confirmed this version of the brief. Show the user the brief and tell "
+                    "them what will run and why, " % (a.shown, key)) + ask_user
+        return "The brief %s does not pre-approve it. To run it, %s" % (a.shown, add_key)
 
     def may_write(self, text):
         if text in DEV_OK or text.startswith("/dev/fd/"):
@@ -268,6 +437,66 @@ def split_lines(cmd):
     return lines
 
 
+def _quote_end(text, j, quote):
+    """Index just past the quote that closes the one opened before `j`."""
+    n = len(text)
+    if quote == "'":
+        k = text.find("'", j)
+        if k < 0:
+            raise ValueError("unclosed single quote")
+        return k + 1
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+        elif ch == '"':
+            return j + 1
+        elif text.startswith("$(", j):
+            j = _paren_end(text, j + 2)
+        elif ch == "`":
+            j = _backtick_end(text, j + 1)
+        else:
+            j += 1
+    raise ValueError("unclosed double quote")
+
+
+def _backtick_end(text, j):
+    """Index just past the backtick that closes the one opened before `j`."""
+    n = len(text)
+    while j < n:
+        if text[j] == "\\":
+            j += 2
+        elif text[j] == "`":
+            return j + 1
+        else:
+            j += 1
+    raise ValueError("unclosed backtick")
+
+
+def _paren_end(text, j):
+    """Index just past the `)` that closes a `$(` opened before `j`. Quoted text is skipped."""
+    depth, n = 1, len(text)
+    while j < n:
+        ch = text[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch in "'\"":
+            j = _quote_end(text, j + 1, ch)
+            continue
+        if ch == "`":
+            j = _backtick_end(text, j + 1)
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if not depth:
+                return j + 1
+        j += 1
+    raise ValueError("unclosed $(")
+
+
 def extract_substitutions(line):
     """Pull out the commands inside `$(...)` and backticks.
 
@@ -293,26 +522,16 @@ def extract_substitutions(line):
         elif ch == "'" and not in_double:
             in_single = True
         elif ch == "$" and line.startswith("$(", i) and not line.startswith("$((", i):
-            depth, j = 1, i + 2
-            while j < n and depth:
-                if line[j] == "(":
-                    depth += 1
-                elif line[j] == ")":
-                    depth -= 1
-                j += 1
-            if depth:
-                raise ValueError("unclosed $(")
+            j = _paren_end(line, i + 2)
             subs.append(line[i + 2:j - 1])
             out.append("__SUB__")
             i = j
             continue
         elif ch == "`":
-            j = line.find("`", i + 1)
-            if j < 0:
-                raise ValueError("unclosed backtick")
-            subs.append(line[i + 1:j])
+            j = _backtick_end(line, i + 1)
+            subs.append(line[i + 1:j - 1])
             out.append("__SUB__")
-            i = j + 1
+            i = j
             continue
         out.append(ch)
         i += 1
@@ -376,7 +595,9 @@ def tokenize(masked, table):
 class Seg:
     def __init__(self):
         self.words = []
+        self.raws = []
         self.redirs = []
+        self.targets = []
 
 
 def build_segments(tokens):
@@ -391,14 +612,18 @@ def build_segments(tokens):
         # A file descriptor number in front of a redirection, like the 2 in `2>file`
         if cur.words and re.fullmatch(r"\d{1,2}", cur.words[-1]):
             cur.words.pop()
+            cur.raws.pop()
 
     while i < n:
-        _raw, text, is_op = tokens[i]
+        raw, text, is_op = tokens[i]
         if not is_op:
             cur.words.append(text)
+            cur.raws.append(raw)
             i += 1
             continue
         target = next_word(i)
+        if target is not None and text in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "<", "<<", "<<<", "<>"):
+            cur.targets += [target, tokens[i + 1][0]]
         if text in (">", ">>", ">|", "&>", "&>>"):
             drop_fd()
             if target is not None:
@@ -420,13 +645,29 @@ def build_segments(tokens):
             drop_fd()
             i += 2 if target is not None else 1
             continue
-        if cur.words or cur.redirs:
+        if cur.words or cur.redirs or cur.targets:
             segs.append(cur)
         cur = Seg()
         i += 1
-    if cur.words or cur.redirs:
+    if cur.words or cur.redirs or cur.targets:
         segs.append(cur)
     return segs
+
+
+def read_line(line):
+    """Parse one line of a command. Raises ValueError when it cannot be read.
+
+    Returns (line with placeholders, [inner command, ...], tokens, tokens of a trailing comment).
+    The first item of each token here is its text with the quotes kept.
+    """
+    line, subs = extract_substitutions(line)
+    masked, table = mask_quotes(line)
+    tokens = [(_Q.sub(lambda m: '"%s"' % table[int(m.group(1))], raw), text, is_op)
+              for raw, text, is_op in tokenize(masked, table)]
+    for i, (raw, _text, is_op) in enumerate(tokens):
+        if not is_op and raw.startswith("#"):
+            return line, subs, tokens[:i], tokens[i:]
+    return line, subs, tokens, []
 
 
 _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -482,7 +723,7 @@ def claude_rule(args):
     return ("deny", DENY_CLAUDE)
 
 
-def git_rule(args):
+def git_rule(args, ctx):
     a = list(args)
     while a and a[0].startswith("-"):
         opt = a.pop(0)
@@ -491,36 +732,38 @@ def git_rule(args):
     if not a:
         return None
     sub, rest = a[0], a[1:]
-    ask = ("ask", ASK_GIT)
     if sub in GIT_READONLY:
         return None
+    if sub == "push":
+        return ctx.category("push")
+    changes = ctx.category("git")
     if sub == "branch":
         if any(re.match(r"^-[dDmMcCfu]", x) or x in ("--delete", "--move", "--copy", "--force",
                "--set-upstream-to", "--unset-upstream", "--edit-description") for x in rest):
-            return ask
+            return changes
         listing = ("--list", "-l", "--contains", "--no-contains", "--merged", "--no-merged", "--points-at")
         if all(x.startswith("-") for x in rest) or any(x in listing for x in rest):
             return None
-        return ask
+        return changes
     if sub == "tag":
         if not rest or (any(x in ("-l", "--list", "-n", "--contains", "--points-at", "--merged", "-v", "--verify")
                             for x in rest) and not any(x in ("-d", "--delete", "-a", "-s", "-f") for x in rest)):
             return None
-        return ask
+        return changes
     if sub == "remote":
-        return None if (not rest or rest[0] in ("-v", "--verbose", "show", "get-url")) else ask
+        return None if (not rest or rest[0] in ("-v", "--verbose", "show", "get-url")) else changes
     if sub == "stash":
-        return None if (rest and rest[0] in ("list", "show")) else ask
+        return None if (rest and rest[0] in ("list", "show")) else changes
     if sub == "worktree":
-        return None if (rest and rest[0] == "list") else ask
+        return None if (rest and rest[0] == "list") else changes
     if sub == "config":
         reading = ("--get", "--get-all", "--list", "-l", "--get-regexp", "--show-origin", "--show-scope")
-        return None if any(x in reading for x in rest) else ask
+        return None if any(x in reading for x in rest) else changes
     if sub == "submodule":
-        return None if (not rest or rest[0] in ("status", "summary")) else ask
+        return None if (not rest or rest[0] in ("status", "summary")) else changes
     if sub == "notes":
-        return None if (not rest or rest[0] in ("list", "show")) else ask
-    return ask
+        return None if (not rest or rest[0] in ("list", "show")) else changes
+    return changes
 
 
 def inline_codes(name, args):
@@ -539,7 +782,8 @@ def inline_codes(name, args):
     return codes
 
 
-def find_rule(args, ctx, heredocs, depth):
+def find_rule(args, ctx):
+    """File-writing flags of find. Commands run by -exec are judged by find_exec_rule."""
     if "-delete" in args:
         return ("deny", "`find -delete` deletes files. " + ctx.why)
     for flag in ("-fprint", "-fprint0", "-fprintf", "-fls"):
@@ -547,6 +791,11 @@ def find_rule(args, ctx, heredocs, depth):
             k = args.index(flag)
             if k + 1 >= len(args) or not ctx.may_write(args[k + 1]):
                 return ("deny", "`find %s` writes to a file. %s" % (flag, ctx.why))
+    return None
+
+
+def find_exec_rule(args, ctx, heredocs, depth):
+    results = []
     i = 0
     while i < len(args):
         if args[i] in ("-exec", "-execdir", "-ok", "-okdir"):
@@ -556,41 +805,95 @@ def find_rule(args, ctx, heredocs, depth):
                 j += 1
             seg = Seg()
             seg.words = ["xargs"] + sub  # treat it as a run whose targets are unknown
-            result = judge_segment(seg, ctx, heredocs, depth + 1)
-            if result:
-                return result
+            results.append(judge_segment(seg, ctx, heredocs, depth + 1))
             i = j
         i += 1
+    return worst(results)
+
+
+class CurlCall:
+    """What a curl command line does: the files it writes, whether it writes to a server, and where."""
+
+    def __init__(self, args):
+        self.outputs = []
+        self.remote_name = False
+        self.writes = False
+        self.elsewhere = False
+        self.urls = []
+        i = 0
+        while i < len(args):
+            a = args[i]
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if a == "--":
+                self.urls.extend(args[i + 1:])
+                break
+            if a.startswith("--"):
+                opt, eq, val = a.partition("=")
+                takes = opt in CURL_LONG_VALUE and not eq
+                self._option(opt, val if eq else (nxt if takes else None))
+                i += 2 if takes else 1
+                continue
+            if a.startswith("-") and len(a) > 1:
+                used_next = False
+                for k in range(1, len(a)):
+                    flag = a[k]
+                    if flag in CURL_SHORT_VALUE:
+                        attached = a[k + 1:]
+                        used_next = not attached
+                        self._option("-" + flag, attached or nxt)
+                        break
+                    self._option("-" + flag, None)
+                i += 2 if used_next else 1
+                continue
+            self.urls.append(a)
+            i += 1
+
+    def _option(self, opt, value):
+        if opt in ("-o", "--output"):
+            self.outputs.append(value)
+        elif opt in ("-O", "-J", "--remote-name", "--remote-name-all", "--remote-header-name"):
+            self.remote_name = True
+        elif opt in ("-X", "--request"):
+            if value and value.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+                self.writes = True
+        elif opt in ("-d", "-F", "-T") or opt.startswith(("--data", "--form", "--upload-file", "--json")):
+            self.writes = True
+        elif opt == "--url":
+            self.urls.append(value or "")
+        if opt in CURL_ELSEWHERE:
+            self.elsewhere = True
+
+
+def is_loopback_url(text):
+    """True when the URL names a loopback host literally: localhost, 127.x.x.x or [::1]."""
+    m = _URL.match(text or "")
+    if not m:
+        return False
+    scheme, host = (m.group(1) or "").lower(), m.group(2).lower()
+    if scheme not in ("", "http", "https"):
+        return False
+    if host == "localhost" or host == "[::1]":
+        return True
+    parts = host.split(".")
+    return (len(parts) == 4 and parts[0] == "127"
+            and all(p.isdigit() and len(p) <= 3 and int(p) <= 255 for p in parts))
+
+
+def curl_file_rule(call, ctx):
+    for target in call.outputs:
+        if target is None or not ctx.may_write(target):
+            return ("deny", "`curl -o` creates a file. " + ctx.why)
+    if call.remote_name:
+        return ("deny", "`curl -O` creates a file in the current folder. " + ctx.why)
     return None
 
 
-def curl_rule(args, ctx):
-    outbound = False
-    i = 0
-    while i < len(args):
-        a = args[i]
-        nxt = args[i + 1] if i + 1 < len(args) else None
-        if a == "--output" or re.fullmatch(r"-[A-Za-z]*o", a):
-            if nxt is None or not ctx.may_write(nxt):
-                return ("deny", "`curl -o` creates a file. " + ctx.why)
-            i += 2
-            continue
-        if a.startswith("--output="):
-            if not ctx.may_write(a.split("=", 1)[1]):
-                return ("deny", "`curl --output` creates a file. " + ctx.why)
-        elif a in ("--remote-name", "--remote-header-name") or re.fullmatch(r"-[A-Za-z]*[OJ][A-Za-z]*", a):
-            return ("deny", "`curl -O` creates a file in the current folder. " + ctx.why)
-        elif a in ("-X", "--request"):
-            if nxt and nxt.upper() in ("POST", "PUT", "PATCH", "DELETE"):
-                outbound = True
-        elif re.fullmatch(r"-X(POST|PUT|PATCH|DELETE)", a, re.I):
-            outbound = True
-        elif a.startswith(("--data", "--form", "--upload-file", "--json")):
-            outbound = True
-        elif not a.startswith("--") and a.startswith(("-d", "-F", "-T")):
-            outbound = True
-        i += 1
-    return ("ask", ASK_OUT) if outbound else None
+def curl_http_rule(call, ctx):
+    if not call.writes:
+        return None
+    if not call.elsewhere and call.urls and all(is_loopback_url(u) for u in call.urls):
+        return None
+    return ctx.category("http")
 
 
 def wget_rule(args, ctx):
@@ -611,46 +914,57 @@ def wget_rule(args, ctx):
     return ("deny", "`wget` downloads and saves a file. " + ctx.why)
 
 
-def pkg_rule(name, args):
+def pkg_changes(name, args):
     sub = first_plain(args)
     if name in PACMAN:
-        if any(re.match(r"^-(S(?![silg])|R|U)", a) for a in args):
-            return ("ask", ASK_PKG)
-        return None
+        return any(re.match(r"^-(S(?![silg])|R|U)", a) for a in args)
     if name == "go":
-        if sub in ("get", "install") or (sub == "mod" and first_plain(args, 1) in ("tidy", "download", "vendor", "init", "edit")):
-            return ("ask", ASK_PKG)
-        return None
+        return sub in ("get", "install") or (sub == "mod" and first_plain(args, 1) in ("tidy", "download", "vendor", "init", "edit"))
     if name == "uv":
-        if sub in ("add", "remove", "sync", "lock", "tool") or (sub == "pip" and first_plain(args, 1) in ("install", "uninstall", "sync")):
-            return ("ask", ASK_PKG)
-        return None
-    if sub in PKG[name]:
-        return ("ask", ASK_PKG)
-    return None
+        return sub in ("add", "remove", "sync", "lock", "tool") or (sub == "pip" and first_plain(args, 1) in ("install", "uninstall", "sync"))
+    return sub in PKG[name]
 
 
-def outbound_rule(name, args):
+def outbound_key(name, args):
+    """The pre-approval key of an outbound command, or None when it changes nothing outside."""
     if name in OUTBOUND_ALWAYS:
-        return ("ask", ASK_OUT)
+        return "ssh"
     if name == "gh":
         group, verb = first_plain(args), first_plain(args, 1)
         if verb in GH_MUT.get(group, ()):
-            return ("ask", ASK_OUT)
+            return "github"
         if group == "api":
             for i, a in enumerate(args):
                 if a in ("-X", "--method") and i + 1 < len(args) and args[i + 1].upper() != "GET":
-                    return ("ask", ASK_OUT)
+                    return "github"
                 if a in ("-f", "-F", "--field", "--raw-field", "--input"):
-                    return ("ask", ASK_OUT)
+                    return "github"
         return None
     if first_plain(args) in OUTBOUND_SUB[name]:
-        return ("ask", ASK_OUT)
+        return "deploy"
     return None
 
 
-def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
-    """Per-command rules for the conductor and for read-only subagents."""
+def category_rule(name, args, ctx, heredocs, depth):
+    """Rules for the pre-approval categories. They apply to every role."""
+    results = []
+    if name == "git":
+        results.append(git_rule(args, ctx))
+    if name == "find":
+        results.append(find_exec_rule(args, ctx, heredocs, depth))
+    if name == "curl":
+        results.append(curl_http_rule(CurlCall(args), ctx))
+    if (name in PKG or name in PACMAN or name in ("go", "uv")) and pkg_changes(name, args):
+        results.append(ctx.category("deps"))
+    if name in OUTBOUND_ALWAYS or name in OUTBOUND_SUB or name == "gh":
+        key = outbound_key(name, args)
+        if key:
+            results.append(ctx.category(key))
+    return worst(results)
+
+
+def file_rule(name, args, via_xargs, ctx, heredocs):
+    """Rules for commands that write files. They apply to the conductor and read-only subagents."""
     plain = [a for a in args if not a.startswith("-")]
 
     if name in MUTATE_ALL or name in MUTATE_LAST:
@@ -688,8 +1002,6 @@ def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
         return None
     if name in EDITORS:
         return ("deny", "`%s` is a file editor. %s" % (name, ctx.why))
-    if name == "git":
-        return git_rule(args)
     if name in INTERPRETERS or re.fullmatch(r"python\d(\.\d+)?", name):
         if name == "perl" and any(
             not a.startswith(("--", "-M", "-I")) and re.match(r"^-[A-Za-z0-9]*i", a) for a in args
@@ -702,16 +1014,169 @@ def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
             return ("deny", "The inline code appears to write files or run other commands. " + ctx.why)
         return None
     if name == "find":
-        return find_rule(args, ctx, heredocs, depth)
+        return find_rule(args, ctx)
     if name == "curl":
-        return curl_rule(args, ctx)
+        return curl_file_rule(CurlCall(args), ctx)
     if name == "wget":
         return wget_rule(args, ctx)
-    if name in PKG or name in PACMAN or name in ("go", "uv"):
-        return pkg_rule(name, args)
-    if name in OUTBOUND_ALWAYS or name in OUTBOUND_SUB or name == "gh":
-        return outbound_rule(name, args)
     return None
+
+
+def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
+    """Per-command rules. An implementation subagent gets only the category rules."""
+    results = [category_rule(name, args, ctx, heredocs, depth)]
+    if ctx.role != "impl":
+        results.append(file_rule(name, args, via_xargs, ctx, heredocs))
+    return worst(results)
+
+
+# ---------------------------------------------------------------- the data rule
+
+# A program that prints its text, such as echo, printf, cat, sed or awk, is not a search here,
+# because its output can be piped into a shell, where the text runs. A search program counts as
+# one only without an option that runs another program, such as `rg --pre` or the pager of
+# `git grep -O`, because that program could be the data command its arguments name.
+GREPS = {"grep", "egrep", "fgrep"}
+RG_RUNS = {"--pre", "--hostname-bin"}
+GIT_SEARCH = {"grep", "log", "show", "diff"}
+FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
+# Options of a wrapper that take no value. Before the program, any other option might take the
+# next word as its value, and that word would then not be the program.
+FLAG_OPTS = {
+    "sudo": {"-E", "-H", "-n", "-S", "-k", "--preserve-env", "--set-home", "--non-interactive", "--stdin"},
+    "env": {"-", "-i", "-0", "-v", "--ignore-environment", "--null", "--debug"},
+    "xargs": {"-0", "-r", "-t", "-x", "--null", "--no-run-if-empty", "--verbose", "--exit"},
+    "timeout": {"-v", "--verbose", "--preserve-status", "--foreground"},
+    "ionice": {"-t", "--ignore"},
+    "setsid": {"-c", "-f", "-w", "--ctty", "--fork", "--wait"},
+    "command": {"-p"},
+}
+
+
+def _long_option(arg, full, shortest):
+    """Whether `arg` is the long option `full`, written whole or shortened to at least `shortest`."""
+    name = arg.split("=", 1)[0]
+    return name.startswith(shortest) and full.startswith(name)
+
+
+def git_searches(args):
+    a = list(args)
+    while a and a[0].startswith("-"):
+        opt = a.pop(0)
+        if opt == "-C" and a:
+            a.pop(0)
+        elif opt not in ("--no-pager", "-P"):
+            return False
+    if not a or a[0] not in GIT_SEARCH:
+        return False
+    sub, rest = a[0], a[1:]
+    for x in rest:
+        if _long_option(x, "--ext-diff", "--ex"):
+            return False
+        # git takes a long option shortened to a unique prefix, and -O inside a bundle of short
+        # options, as in -nO<pager>
+        if sub == "grep" and (_long_option(x, "--open-files-in-pager", "--op") or re.match(r"-[^-]*O", x)):
+            return False
+    return True
+
+
+def is_search(word, args):
+    name = os.path.basename(word)
+    if word != name and not word.startswith("/"):
+        return False  # a relative path such as ./grep names a local program
+    if name in GREPS:
+        return True
+    if name == "rg":
+        return not any(a.split("=", 1)[0] in RG_RUNS for a in args)
+    if name == "git":
+        return git_searches(args)
+    return False
+
+
+def program_is_certain(lead):
+    """Whether the word after the stripped words is the program the wrappers run."""
+    if not lead:
+        return True
+    prev = lead[-1]
+    if not prev.startswith("-") or prev == "--" or (prev.startswith("--") and "=" in prev):
+        return True
+    wrapper = next((os.path.basename(w) for w in reversed(lead) if os.path.basename(w) in WRAPPERS), "")
+    if prev in FLAG_OPTS.get(wrapper, ()):
+        return True
+    return not prev.startswith("--") and len(prev) > 2 and prev[:2] in VALUE_OPTS.get(wrapper, ())
+
+
+def counted_mask(words):
+    """Which words of a simple command the data rule reads.
+
+    Returns ([True for each word it reads, False for each it leaves out], whether any were left out).
+    """
+    rest, _via_xargs = unwrap(words)
+    k = len(words) - len(rest)
+    if not rest or not program_is_certain(words[:k]):
+        return [True] * len(words), False
+    if is_search(rest[0], rest[1:]):
+        return [True] * k + [False] * len(rest), True
+    if os.path.basename(rest[0]) != "find":
+        return [True] * len(words), False
+    mask, searched = [True] * (k + 1), False
+    args, i = rest[1:], 0
+    while i < len(args):
+        mask.append(True)
+        if args[i] in FIND_EXEC:
+            j = i + 1
+            while j < len(args) and args[j] not in ("__SEMI__", ";", "+"):
+                j += 1
+            inner, inner_searched = counted_mask(args[i + 1:j])
+            mask += inner
+            searched = searched or inner_searched
+            i = j
+            continue
+        i += 1
+    return mask, searched
+
+
+def data_hit(cmd, depth=0):
+    """Whether the command names a data command anywhere but in a search program's arguments.
+
+    Returns (hit, whether any search program's arguments were left out).
+    """
+    if depth > 5:
+        return bool(RISKY.search(cmd)), False
+    body, bodies = strip_heredocs(cmd)
+    pieces, searched = [], False
+    for line in split_lines(body):
+        if not line.strip():
+            continue
+        try:
+            line, subs, tokens, comment = read_line(line)
+        except ValueError:
+            pieces.append(line)
+            continue
+        for inner in subs:
+            hit, inner_searched = data_hit(inner, depth + 1)
+            if hit:
+                return True, True
+            searched = searched or inner_searched
+        line_searched = False
+        for seg in build_segments(tokens):
+            mask, seg_searched = counted_mask(seg.words)
+            pieces.append(" ".join([w for w, m in zip(seg.words, mask) if m] + seg.targets))
+            # Removing quotes can join a name to the next word, as in db:migrate"VERSION=1", and
+            # the shell may still run it, so the words as written count as well.
+            pieces.append(" ".join(r for r, m in zip(seg.raws, mask) if m))
+            line_searched = line_searched or seg_searched
+        pieces.append(" ".join(text for _raw, text, _op in comment))
+        pieces.append(" ".join(raw for raw, _text, _op in comment))
+        if not line_searched:
+            pieces.append(line)
+        searched = searched or line_searched
+    pieces.extend(bodies)
+    if RISKY.search("\n".join(pieces)):
+        return True, searched
+    if not searched and RISKY.search(cmd):
+        return True, False
+    return False, searched
 
 
 def judge_segment(seg, ctx, heredocs, depth):
@@ -741,36 +1206,35 @@ def judge_segment(seg, ctx, heredocs, depth):
             if not ctx.may_write(target):
                 results.append(("deny", "Redirecting output to `%s` writes a file. %s" % (target, ctx.why)))
                 break
-        if name:
-            results.append(tool_rule(name, args, via_xargs, ctx, heredocs, depth))
+    if name:
+        results.append(tool_rule(name, args, via_xargs, ctx, heredocs, depth))
     return worst(results)
 
 
 def judge_command(cmd, ctx, depth=0):
     """Judge a whole command. Returns None (pass) or ("deny" | "ask", reason)."""
     if depth > 5:
-        return None if ctx.role == "impl" else ("ask", ASK_PARSE)
+        return None if ctx.role == "impl" else ("deny", DENY_PARSE)
     results = []
-    if ctx.role != "impl" and RISKY.search(cmd):
-        results.append(("ask", ASK_DATA))
+    if data_hit(cmd, depth)[0]:
+        # Nothing lets a data command through because its text looks like it targets a test or
+        # throwaway database. In a real project an environment assignment placed in front of a
+        # wrapper script was dropped before the command ran, and a schema load reached a remote
+        # database, so the command text does not prove the target. A sign of production in the
+        # text counts only the other way: it takes the command out of the `data` key.
+        results.append(ctx.category("data", production=bool(PRODUCTION.search(cmd))))
     body, heredocs = strip_heredocs(cmd)
     for line in split_lines(body):
         if not line.strip():
             continue
         try:
-            line, subs = extract_substitutions(line)
-            masked, table = mask_quotes(line)
-            tokens = tokenize(masked, table)
+            _line, subs, tokens, _comment = read_line(line)
         except ValueError:
             if ctx.role != "impl":
-                results.append(("ask", ASK_PARSE))
+                results.append(("deny", DENY_PARSE))
             continue
         for inner in subs:
             results.append(judge_command(inner, ctx, depth + 1))
-        for i, (raw, _text, is_op) in enumerate(tokens):
-            if not is_op and raw.startswith("#"):  # a comment: drop the rest of the line
-                tokens = tokens[:i]
-                break
         for seg in build_segments(tokens):
             results.append(judge_segment(seg, ctx, heredocs, depth))
     return worst(results)
@@ -802,6 +1266,9 @@ def handle_write(path_text, data, role):
         if conductor_may_write(path, data):
             if c.inside(path, c.work_dir(data)):
                 c.ensure_gitignore(data)
+            brief_of = c.brief_unit(path, data)
+            if brief_of:
+                c.set_active_work(data, brief_of)
             c.allow()
         if c.in_reports(path, data):
             c.deny("Reports are written by subagents. The conductor cannot write or edit a report (Principle 7).")

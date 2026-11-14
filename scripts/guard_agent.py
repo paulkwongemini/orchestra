@@ -148,6 +148,7 @@ def main():
             % c.DOCUMENTATION_SKILL
         )
     unit = check_task_spec(data, ti.get("prompt"))
+    c.set_active_work(data, unit)
     if impl:
         check_brief(data, unit)
     c.allow()

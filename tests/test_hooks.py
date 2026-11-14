@@ -894,9 +894,15 @@ class GuardBashTest(HookTest):
         "truncate -s 0 app.log",
     ]
     ASK = [
+        "git push origin main",
+        "curl -X POST https://api.example.com -d '{\"a\":1}'",
+        "ssh host ls",
+        "gh pr create --title x",
+        "kubectl apply -f deploy.yaml",
+    ]
+    NOT_PREAPPROVED = [
         'git commit -m "fix"',
         "git add -A && git commit -m x",
-        "git push origin main",
         "git checkout -- src/a.py",
         "git branch -D feature",
         "git branch new-feature",
@@ -908,11 +914,7 @@ class GuardBashTest(HookTest):
         "yarn",
         "pacman -S ripgrep",
         "go mod tidy",
-        "curl -X POST https://api.example.com -d '{\"a\":1}'",
         "bin/rails db:migrate",
-        "ssh host ls",
-        "gh pr create --title x",
-        "kubectl apply -f deploy.yaml",
         'echo "unterminated',
     ]
 
@@ -928,6 +930,10 @@ class GuardBashTest(HookTest):
         for cmd in self.ASK:
             self.assertEqual(self.bash(cmd), "ask", cmd)
 
+    def test_commands_refused_without_preapproval(self):
+        for cmd in self.NOT_PREAPPROVED:
+            self.assertEqual(self.bash(cmd), "deny", cmd)
+
     def test_readonly_subagent(self):
         def run(cmd):
             return self.verdict("guard_main.py", self.sub("opus-analyst", "Bash", {"command": cmd}))
@@ -938,15 +944,15 @@ class GuardBashTest(HookTest):
         self.assertEqual(run("ruby fetch.rb > %s/files/T02/out.jsonl" % UNIT), "allow")
         self.assertEqual(run("cp src/app.py %s/files/T02/app.py" % UNIT), "allow")
         self.assertEqual(run("ruby fetch.rb > %s/brief.md" % UNIT), "deny")
-        self.assertEqual(run('git commit -m "x"'), "ask")
+        self.assertEqual(run('git commit -m "x"'), "deny")
         self.assertEqual(run("claude -p x"), "deny")
 
     def test_implementation_subagent(self):
         def run(cmd):
             return self.verdict("guard_main.py", self.sub("opus-engineer", "Bash", {"command": cmd}))
         self.assertEqual(run("sed -i 's/a/b/' src/app.py"), "allow")
-        self.assertEqual(run("rm -rf build && npm install"), "allow")
-        self.assertEqual(run('git commit -m "x"'), "allow")
+        self.assertEqual(run("rm -rf build && npm install"), "deny")  # nothing is pre-approved
+        self.assertEqual(run('git commit -m "x"'), "deny")
         self.assertEqual(run("claude -p x"), "deny")
         self.assertEqual(run('bash -c "claude -p x --model fable"'), "deny")
         self.assertEqual(run("claude --version"), "allow")
@@ -954,6 +960,468 @@ class GuardBashTest(HookTest):
     def test_ordinary_session_is_left_alone(self):
         self.set_transcript([request(SONNET)])
         for cmd in ("rm -rf build", "sed -i 's/a/b/' src/app.py", 'git commit -m "x"', "echo hi > src/x.txt"):
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+
+
+# Shortened copies of commands that froze a real overnight session
+FROZEN_A = ('for f in components browse; do printf "%-14s var()=%s\\n" $f '
+            '"$(grep -o \'var(--\' $f.css | wc -l)"; done')
+FROZEN_B = ("ls -R .orchestra/2026-11-12-login-fix/files/T02 | head -50; docker exec -w /app app bash -lc "
+            "'bin/rails db:prepare db:seed >/dev/null 2>&1; bin/rails runner \"puts Book.count\"'")
+FROZEN_C = """docker exec -w /app app bash -lc '
+bin/rails db:migrate:status 2>&1 | tail -3; bin/rails test 2>&1 | tail -2
+PW=$(head -c 18 /dev/urandom | base64 | tr -dc "A-Za-z0-9" | head -c 16)
+OPERATOR_EMAIL=op.review@example.com OPERATOR_PASSWORD=$PW bin/rails db:seed 2>&1 | tail -1
+curl -s -o /tmp/out.html -X POST http://127.0.0.1:3141/session --data-urlencode "email_address=op.review@example.com"
+bin/rails db:seed:replant 2>&1 | tail -1'"""
+FROZEN_D = """docker exec -w /app app bash -lc '
+set -e
+rm -rf tmp/final; mkdir -p tmp/final/shots
+DATABASE_URL=sqlite3:tmp/final/full.sqlite3 bin/rails db:prepare >/dev/null 2>&1
+DATABASE_URL=sqlite3:tmp/final/full.sqlite3 bin/rails db:seed 2>&1 | tail -1'
+cd tmp/final/shots && for s in home shelf; do for w in 390 1280; do printf "%s-%s: AE=%s\\n" $s $w "$(compare -metric AE $s-$w-a.png $s-$w-b.png null: 2>&1 | head -1 | cut -d' ' -f1)"; done; done"""
+
+KEY_COMMANDS = {
+    "data": "bin/rails db:migrate",
+    "deps": "npm install lodash",
+    "git": 'git commit -m "x"',
+    "push": "git push origin main",
+    "github": "gh pr create --title x",
+    "http": "curl -X POST https://api.example.com -d a=1",
+    "ssh": "ssh host ls",
+    "deploy": "kubectl apply -f deploy.yaml",
+}
+
+
+class PreapprovalTest(HookTest):
+    """Principle 3: what the brief in the active work folder pre-approves."""
+
+    PROMPT = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % UNIT
+
+    # ---- helpers
+
+    def brief(self, line="", unit=UNIT, at=2000, text=BRIEF):
+        self.write(unit + "/brief.md", text + ("\n" + line + "\n" if line else ""), mtime=at)
+
+    def spoke(self, at):
+        self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": "ok"})
+        turn = os.path.join(self.state, "sessions", "session-1.turn")
+        os.utime(turn, (at, at))
+
+    def activate(self, unit=UNIT, how="read"):
+        brief = unit + "/brief.md"
+        if how == "read":
+            self.assertEqual(self.verdict("report_gate.py", self.main("Read", {"file_path": brief})), "allow")
+        elif how == "write":
+            self.assertEqual(self.verdict("guard_main.py", self.main("Write", {"file_path": brief, "content": "x"})), "allow")
+        else:
+            self.write(unit + "/tasks/T01-login-fix.md", TASK)
+            prompt = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % unit
+            payload = self.main("Agent", {"subagent_type": "orchestra:opus-analyst", "prompt": prompt})
+            self.assertEqual(self.verdict("guard_agent.py", payload), "allow")
+
+    def confirmed(self, line, unit=UNIT, text=BRIEF):
+        """A brief with this line, confirmed by the user, in the active work folder."""
+        self.brief(line, unit=unit, text=text)
+        self.spoke(3000)
+        self.activate(unit)
+
+    def reason(self, payload):
+        out = self.run_hook("guard_main.py", payload)
+        return out["hookSpecificOutput"]["permissionDecisionReason"] if out else ""
+
+    def impl(self, cmd):
+        return self.verdict("guard_main.py", self.sub("opus-engineer", "Bash", {"command": cmd}))
+
+    def analyst(self, cmd):
+        return self.verdict("guard_main.py", self.sub("opus-analyst", "Bash", {"command": cmd}))
+
+    # ---- the commands that froze the real session
+
+    def test_unreadable_command_passes_with_nothing_pre_approved(self):
+        self.assertEqual(self.bash(FROZEN_A), "allow")
+
+    def test_frozen_commands_pass_with_data(self):
+        self.confirmed("Pre-approved: data")
+        for cmd in (FROZEN_A, FROZEN_B, FROZEN_C, FROZEN_D):
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+
+    def test_frozen_commands_are_refused_without_the_line(self):
+        self.confirmed("")
+        for cmd in (FROZEN_B, FROZEN_C, FROZEN_D):
+            payload = self.main("Bash", {"command": cmd})
+            self.assertEqual(self.verdict("guard_main.py", payload), "deny", cmd)
+            why = self.reason(payload)
+            self.assertIn("`data`", why)
+            self.assertIn("`Pre-approved:`", why)
+            self.assertIn("## Decision rights", why)
+            self.assertIn("does not pre-approve", why)
+
+    # ---- when the line counts
+
+    def test_each_recording_moment_makes_the_folder_active(self):
+        for how in ("read", "write", "delegate"):
+            with self.subTest(how=how):
+                self.brief("Pre-approved: data", unit=OTHER_UNIT)
+                self.brief("Pre-approved: data")
+                self.spoke(3000)
+                self.activate(OTHER_UNIT, "read")
+                os.remove(os.path.join(self.proj, OTHER_UNIT, "brief.md"))
+                self.assertEqual(self.bash("bin/rails db:migrate"), "deny")
+                self.activate(UNIT, how)
+                self.assertEqual(self.bash("bin/rails db:migrate"), "allow")
+
+    def test_no_active_work_folder(self):
+        self.brief("Pre-approved: data")
+        self.spoke(3000)
+        payload = self.main("Bash", {"command": "bin/rails db:migrate"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        self.assertIn("no active work folder", self.reason(payload))
+
+    def test_brief_newer_than_the_last_turn(self):
+        self.spoke(1000)
+        self.brief("Pre-approved: data", at=2000)
+        self.activate()
+        payload = self.main("Bash", {"command": "bin/rails db:migrate"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        self.assertIn("has not confirmed this version of the brief", self.reason(payload))
+        self.spoke(3000)
+        self.assertEqual(self.verdict("guard_main.py", payload), "allow")
+
+    def test_no_user_turn_recorded(self):
+        self.brief("Pre-approved: data")
+        self.activate()
+        payload = self.main("Bash", {"command": "bin/rails db:migrate"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        self.assertIn("no user turn is recorded", self.reason(payload))
+        for cmd in ("git push origin main", "ssh host ls"):
+            self.assertEqual(self.bash(cmd), "ask", cmd)
+
+    def test_brief_of_another_work_folder_does_not_count(self):
+        self.brief("Pre-approved: data")
+        self.brief("Pre-approved: git", unit=OTHER_UNIT)
+        self.spoke(3000)
+        self.activate(OTHER_UNIT)
+        self.assertEqual(self.bash("bin/rails db:migrate"), "deny")
+        self.assertEqual(self.bash('git commit -m "x"'), "allow")
+        self.activate(UNIT)  # the latest record wins
+        self.assertEqual(self.bash("bin/rails db:migrate"), "allow")
+        self.assertEqual(self.bash('git commit -m "x"'), "deny")
+
+    def test_a_subagent_does_not_change_the_active_folder(self):
+        self.brief("Pre-approved: data")
+        self.brief("", unit=OTHER_UNIT)
+        self.spoke(3000)
+        self.activate(UNIT)
+        read = self.sub("opus-analyst", "Read", {"file_path": OTHER_UNIT + "/brief.md"})
+        self.assertEqual(self.verdict("report_gate.py", read), "allow")
+        write = self.sub("opus-engineer", "Write", {"file_path": OTHER_UNIT + "/brief.md", "content": "x"})
+        self.assertEqual(self.verdict("guard_main.py", write), "deny")
+        self.assertEqual(self.bash("bin/rails db:migrate"), "allow")
+
+    def test_sessions_do_not_share_the_active_folder(self):
+        self.confirmed("Pre-approved: data")
+        payload = self.main("Bash", {"command": "bin/rails db:migrate"})
+        payload["session_id"] = "session-2"
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+
+    # ---- the keys
+
+    def test_each_key_covers_its_own_category_only(self):
+        for key, own in KEY_COMMANDS.items():
+            with self.subTest(key=key):
+                self.confirmed("Pre-approved: " + key)
+                self.assertEqual(self.bash(own), "allow", own)
+                for other, cmd in KEY_COMMANDS.items():
+                    if other != key:
+                        self.assertNotEqual(self.bash(cmd), "allow", "%s passed %s" % (key, cmd))
+        self.confirmed("Pre-approved: deploy")
+        self.assertEqual(self.bash("docker push registry/app:1"), "allow")
+
+    def test_a_command_in_two_categories_needs_both_keys(self):
+        cmd = 'git commit -m "x" && git push origin main'
+        self.confirmed("Pre-approved: git")
+        self.assertEqual(self.bash(cmd), "ask")
+        self.confirmed("Pre-approved: push")
+        self.assertEqual(self.bash(cmd), "deny")
+        self.confirmed("Pre-approved: git, push")
+        self.assertEqual(self.bash(cmd), "allow")
+        self.confirmed("Pre-approved: data")
+        self.assertEqual(self.bash("bin/rails db:migrate && npm install"), "deny")
+
+    def test_prompts_name_the_key(self):
+        for key in ("push", "github", "http", "ssh", "deploy"):
+            payload = self.main("Bash", {"command": KEY_COMMANDS[key]})
+            self.assertEqual(self.verdict("guard_main.py", payload), "ask", key)
+            self.assertIn("`%s`" % key, self.reason(payload), key)
+
+    def test_refusals_say_the_way_forward(self):
+        self.confirmed("")
+        for key in ("data", "deps", "git"):
+            why = self.reason(self.main("Bash", {"command": KEY_COMMANDS[key]}))
+            self.assertIn("`%s`" % key, why)
+            self.assertIn("ask them", why)
+            self.assertIn("does not depend on the answer", why)
+        why = self.reason(self.sub("opus-engineer", "Bash", {"command": "npm install"}))
+        self.assertIn("`deps`", why)
+        self.assertIn("BLOCKED", why)
+        self.assertIn("another way", why)
+        why = self.reason(self.sub("opus-analyst", "Bash", {"command": "npm install"}))
+        self.assertIn("read-only", why)
+        self.assertIn("recommendation", why)
+
+    def test_refusals_name_the_way_that_needs_no_approval(self):
+        self.confirmed("")
+        mentions = ('echo "run bin/rails db:seed first"', "sed -n '/db:migrate/p' README.md")
+        for cmd in mentions:
+            for payload in (self.main("Bash", {"command": cmd}),
+                            self.sub("opus-engineer", "Bash", {"command": cmd}),
+                            self.sub("opus-analyst", "Bash", {"command": cmd})):
+                self.assertEqual(self.verdict("guard_main.py", payload), "deny", cmd)
+                why = self.reason(payload)
+                self.assertIn("Grep, Read or Write tool", why, cmd)
+                self.assertIn("needs no pre-approval", why, cmd)
+        why = self.reason(self.sub("opus-engineer", "Bash", {"command": mentions[0]}))
+        self.assertLess(why.index("Grep, Read or Write tool"), why.index("Do not look for another way"))
+        self.assertIn("run the data command itself", why)
+        self.confirmed("Pre-approved: data")
+        why = self.reason(self.sub("opus-engineer", "Bash", {"command": "RAILS_ENV=production bin/rails db:migrate"}))
+        self.assertIn("Grep, Read or Write tool", why)
+        self.confirmed("")
+        for cmd in ("git checkout -- src/a.py", "git mv a b", "git rm x", "git add -A"):
+            payload = self.sub("opus-engineer", "Bash", {"command": cmd})
+            self.assertEqual(self.verdict("guard_main.py", payload), "deny", cmd)
+            why = self.reason(payload)
+            self.assertIn("change the file directly, without git", why, cmd)
+            self.assertIn("needs the git command itself", why, cmd)
+            self.assertNotIn("Grep, Read or Write tool", why, cmd)
+        self.assertNotIn("without git", self.reason(self.main("Bash", {"command": "git checkout -- src/a.py"})))
+        for payload in (self.main("Bash", {"command": "npm install"}),
+                        self.sub("opus-engineer", "Bash", {"command": "npm install"}),
+                        self.sub("opus-analyst", "Bash", {"command": "npm install"})):
+            why = self.reason(payload)
+            self.assertIn("`deps`" if "read-only" not in why else "read-only", why)
+            self.assertNotIn("Grep, Read or Write tool", why)
+            self.assertNotIn("without git", why)
+
+    # ---- production
+
+    def test_production_data_commands_go_to_the_user(self):
+        self.confirmed("Pre-approved: data")
+        for cmd in (
+            "RAILS_ENV=production bin/rails db:migrate",
+            "bin/rails db:migrate -e production",
+            "RACK_ENV='prod' bundle exec rake db:migrate",
+            'NODE_ENV="production" npx prisma migrate deploy',
+            "APP_ENV=prod alembic upgrade head",
+            "DJANGO_ENV=production python manage.py migrate",
+            "bin/rails db:seed --env production",
+            "bin/rails db:seed --env=production",
+            "bin/rails db:migrate --environment production",
+            "bin/rails db:migrate --environment=production",
+            "docker exec -e RAILS_ENV=production app bin/rails db:migrate",
+        ):
+            self.assertEqual(self.bash(cmd), "ask", cmd)
+            self.assertEqual(self.impl(cmd), "deny", cmd)
+        self.assertEqual(self.bash("RAILS_ENV=staging bin/rails db:migrate"), "allow")
+
+    def test_a_test_target_does_not_pass_a_data_command(self):
+        self.confirmed("")
+        for cmd in ("RAILS_ENV=test bin/rails db:schema:load", "cmd/rake RAILS_ENV=test db:migrate",
+                    "DATABASE_URL=sqlite3:tmp/x.sqlite3 bin/rails db:seed"):
+            self.assertEqual(self.bash(cmd), "deny", cmd)
+
+    # ---- searches
+
+    SEARCHES = [
+        'grep -rn "db:seed" README.md',
+        'rg "db:migrate" bin/',
+        'git log --grep "db:migrate"',
+        'git --no-pager log --grep "db:migrate"',
+        'git -C sub diff -G"db:seed"',
+        'echo "$(grep -c \'db:seed\' README.md)"',
+        'grep -rn "drop table" db/ | head -5',
+        "sudo grep db:seed /etc/motd",
+        'timeout 5 rg "manage.py migrate" .',
+        "find . -name '*.md' -exec grep -l \"db:seed\" {} +",
+        'grep -rn "RAILS_ENV=production bin/rails db:migrate" docs/',
+    ]
+    NOT_SEARCHES = [
+        "bin/rails db:migrate",
+        "docker exec app bash -lc 'bin/rails db:seed'",
+        'echo "bin/rails db:migrate" | sh',
+        'psql -c "DROP TABLE users"',
+        "docker exec -i app bash <<'EOF'\nbin/rails db:migrate\nEOF",
+        "grep -q x f && bin/rails db:migrate",
+        'grep "db:seed" f; alembic upgrade head',
+        'bash -c "grep x f; bin/rails db:migrate"',
+        "rg --pre 'bin/rails db:migrate' x",
+        "rg --pre='bin/rails db:migrate' x",
+        "git -c core.pager='bin/rails db:migrate' log",
+        "GIT_PAGER='bin/rails db:migrate' git log",
+        "git grep -O'bin/rails db:migrate' x",
+        "env RAILS_ENV=test bin/rails db:schema:load",
+        "echo x | xargs -I{} bin/rails db:migrate",
+        "find . -name '*.rb' -exec bin/rails db:migrate \\;",
+        'echo "run bin/rails db:seed first"',
+        "sed -n '/db:migrate/p' README.md",
+    ]
+    OTHER_RUNS = [
+        'rg --hostname-bin="bin/rails db:migrate" x',
+        'git grep -nO"bin/rails db:migrate" x',
+        'git grep --open-files-in-pager="bin/rails db:migrate" x',
+        'git grep --open-f="bin/rails db:migrate" x',
+        'git diff --ext-diff "db:seed"',
+        'git --git-dir=.git log --grep "db:seed"',
+        "env --unset grep bin/rails db:migrate",
+        "sudo -D grep bin/rails db:migrate",
+        "./grep db:migrate",
+        "find . -exec grep x {} ';' -exec bin/rails db:migrate ';'",
+        'grep x f; bin/rails db:migrate"VERSION=1"',
+        'grep x f # bin/rails db:migrate',
+        'grep x f; <<< "bin/rails db:migrate"',
+        "grep -f - f <<'EOF'\ndb:seed\nEOF",
+    ]
+
+    def test_searches_pass_with_nothing_pre_approved(self):
+        self.confirmed("Pre-approved: none")
+        for cmd in self.SEARCHES:
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+            self.assertEqual(self.impl(cmd), "allow", cmd)
+            self.assertEqual(self.analyst(cmd), "allow", cmd)
+
+    def test_other_commands_naming_data_commands_are_still_refused(self):
+        self.confirmed("Pre-approved: none")
+        for cmd in self.NOT_SEARCHES + self.OTHER_RUNS:
+            for payload in (self.main("Bash", {"command": cmd}), self.sub("opus-engineer", "Bash", {"command": cmd})):
+                self.assertEqual(self.verdict("guard_main.py", payload), "deny", cmd)
+                self.assertIn("`data`", self.reason(payload), cmd)
+
+    def test_unreadable_line_keeps_the_data_rule_for_a_subagent(self):
+        self.confirmed("Pre-approved: none")
+        cmd = 'echo "unterminated; bin/rails db:migrate'
+        self.assertEqual(self.impl(cmd), "deny")
+        self.assertIn("`data`", self.reason(self.sub("opus-engineer", "Bash", {"command": cmd})))
+        self.assertEqual(self.impl('echo "unterminated'), "allow")
+
+    def test_data_key_covers_the_commands_that_are_not_searches(self):
+        self.confirmed("Pre-approved: data")
+        for cmd in self.NOT_SEARCHES:
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+            self.assertEqual(self.impl(cmd), "allow", cmd)
+        self.assertEqual(self.bash("RAILS_ENV=production bin/rails db:migrate"), "ask")
+        self.assertEqual(self.bash("RAILS_ENV=production echo $(bin/rails db:migrate)"), "ask")
+
+    # ---- the parser
+
+    def test_quoted_parentheses_inside_substitutions(self):
+        self.assertEqual(self.bash('echo "$(grep -o \'var(--\' f.css | wc -l)"'), "allow")
+        self.assertEqual(self.bash("echo $(echo ')')"), "allow")
+        self.assertEqual(self.bash('echo "$(printf \')\' ; rm -rf src)"'), "deny")
+        self.assertEqual(self.bash("echo $(echo ')'; rm -rf src)"), "deny")
+        self.assertEqual(self.bash('echo "$(echo "$(printf \')\'; rm -rf src)")"'), "deny")
+        self.assertEqual(self.bash('echo "$(echo "$(printf \')\')")"'), "allow")
+        self.assertEqual(self.bash("echo `printf ')'; rm -rf src`"), "deny")
+        self.assertEqual(self.bash("echo $(echo `echo ')'`)"), "allow")
+        self.assertEqual(self.bash("echo $(echo `rm -rf src`)"), "deny")
+        self.assertEqual(self.bash("echo `echo hi`;rm -rf src"), "deny")
+        self.assertEqual(self.bash("echo $(echo hi);rm -rf src"), "deny")
+        self.assertEqual(self.bash('echo "`echo \')\'`";rm -rf src'), "deny")
+
+    def test_unreadable_commands_are_refused(self):
+        for cmd in ('echo "unterminated', "echo $(ls", "eval " * 8 + "ls"):
+            payload = self.main("Bash", {"command": cmd})
+            self.assertEqual(self.verdict("guard_main.py", payload), "deny", cmd)
+            self.assertIn("could not read", self.reason(payload))
+            self.assertIn("simpler, separate commands", self.reason(payload))
+            self.assertEqual(self.analyst(cmd), "deny", cmd)
+            self.assertEqual(self.impl(cmd), "allow", cmd)
+
+    # ---- the subagents
+
+    def test_implementation_subagent(self):
+        cmds = {"git": 'git commit -m x', "push": "git push origin main", "deps": "npm install",
+                "data": "bin/rails db:migrate", "ssh": "ssh host ls"}
+        for cmd in cmds.values():
+            self.assertEqual(self.impl(cmd), "deny", cmd)
+        for cmd in ("sed -i 's/a/b/' src/app.py", "rm -rf build", "echo x > src/x.txt",
+                    "curl -o x.zip https://example.com/x.zip", "curl -X POST http://localhost:3000/a -d a=1"):
+            self.assertEqual(self.impl(cmd), "allow", cmd)
+        for key, cmd in cmds.items():
+            with self.subTest(key=key):
+                self.confirmed("Pre-approved: " + key)
+                self.assertEqual(self.impl(cmd), "allow", cmd)
+
+    def test_readonly_subagent(self):
+        for key, cmd in (("git", "git commit -m x"), ("data", "bin/rails db:migrate")):
+            self.confirmed("")
+            self.assertEqual(self.analyst(cmd), "deny", cmd)
+            self.confirmed("Pre-approved: " + key)
+            self.assertEqual(self.analyst(cmd), "deny", cmd)
+        self.assertEqual(self.analyst("git status"), "allow")
+
+    # ---- curl
+
+    def test_loopback_curl(self):
+        for cmd in (
+            "curl -X POST http://127.0.0.1:3000/session -d a=1",
+            "curl -X POST http://localhost:3000/ -d a=1",
+            "curl -X POST http://[::1]:3000/ -d a=1",
+            "curl -s -XPOST localhost:3000/x --data-urlencode 'a=b c'",
+            "curl -sS -H 'Content-Type: application/json' --json '{}' http://127.1.2.3/api",
+        ):
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+        for cmd in (
+            "curl -X POST https://api.example.com -d a=1",
+            'curl -X POST "$B/session" -d a=1',
+            "curl -X POST http://127.0.0.1.nip.io/x -d a=1",
+            "curl -X POST http://localhost.example.com/x -d a=1",
+            "curl -X POST http://localhost@example.com/x -d a=1",
+            "curl -X POST http://localhost:3000/x http://example.com/y -d a=1",
+            "curl -X POST --resolve localhost:80:203.0.113.5 http://localhost/x -d a=1",
+            "curl -x http://proxy.example.com:8080 -X POST http://localhost/x -d a=1",
+            "curl -sL -X POST http://localhost/x -d a=1",
+            "curl -X POST -d a=1",
+        ):
+            self.assertEqual(self.bash(cmd), "ask", cmd)
+        self.confirmed("Pre-approved: http")
+        self.assertEqual(self.bash("curl -X POST https://api.example.com -d a=1"), "allow")
+        self.assertEqual(self.bash('curl -X POST "$B/session" -d a=1'), "allow")
+
+    # ---- the line in the brief
+
+    def test_line_forms(self):
+        approved = [
+            "- Pre-approved: data",
+            "* **Pre-approved:** data, deps",
+            "**Pre-approved**: `data`, `deps`",
+            "`Pre-approved`: `data` `deps`",
+            "pre-approved： data",
+            "PRE-APPROVED: data deps",
+            "1. Pre-approved: deps,data",
+        ]
+        for line in approved:
+            with self.subTest(line=line):
+                self.confirmed(line)
+                self.assertEqual(self.bash("bin/rails db:migrate"), "allow", line)
+        for line in ("Pre-approved: none", "Pre-approved:", "- Pre-approved: `none`", "Pre-approved: database",
+                     "Approved: data", "Not pre-approved: data"):
+            with self.subTest(line=line):
+                self.confirmed(line)
+                self.assertEqual(self.bash("bin/rails db:migrate"), "deny", line)
+
+    def test_line_outside_decision_rights_does_not_count(self):
+        self.confirmed("", text=BRIEF.replace("Do not change the public API.", "Pre-approved: data"))
+        self.assertEqual(self.bash("bin/rails db:migrate"), "deny")
+
+    def test_brief_body_in_another_language(self):
+        self.confirmed("- `Pre-approved`: `data`", text=BRIEF_KO)
+        self.assertEqual(self.bash("bin/rails db:migrate"), "allow")
+        self.assertEqual(self.bash("npm install"), "deny")
+
+    def test_ordinary_session_is_left_alone(self):
+        self.set_transcript([request(SONNET)])
+        for cmd in (FROZEN_B, FROZEN_C, FROZEN_D, 'echo "unterminated', "git push origin main", "npm install"):
             self.assertEqual(self.bash(cmd), "allow", cmd)
 
 

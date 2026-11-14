@@ -9,6 +9,9 @@ A report opens right away in two cases:
   - A read-only subagent wrote it. The report is the result.
 
 This hook guarantees the order. It cannot guarantee the quality of the review.
+
+When the conductor reads `.orchestra/<work>/brief.md`, that folder becomes the session's active
+work folder, whose brief decides what is pre-approved (see guard_main.py).
 """
 import os
 import sys
@@ -74,6 +77,9 @@ def main():
     if not target:
         c.allow()
     path = c.resolve(target, data)
+    brief_of = c.brief_unit(path, data)
+    if brief_of:
+        c.set_active_work(data, brief_of)
     if not c.in_reports(path, data) or not os.path.isfile(path):
         c.allow()
 

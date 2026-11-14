@@ -294,6 +294,34 @@ def last_user_turn(data):
         return None
 
 
+def _work_file(data):
+    folder = os.path.join(state_dir(), "sessions")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".work")
+
+
+def set_active_work(data, unit):
+    """Record the work folder the conductor of this session is working in. The latest record wins."""
+    try:
+        with open(_work_file(data), "w", encoding="utf-8") as f:
+            f.write(os.path.realpath(unit))
+    except OSError:
+        pass
+
+
+def active_work(data):
+    """The session's active work folder, or None when none is recorded or it is not a work folder of this project."""
+    try:
+        with open(_work_file(data), encoding="utf-8") as f:
+            unit = f.read().strip()
+    except OSError:
+        return None
+    if not unit:
+        return None
+    found, rest = split_unit(unit, data)
+    return unit if found == unit and not rest else None
+
+
 def main_is_conductor(data):
     """True for the main conversation of a session that runs on a Fable model,
     unless the user turned conductor mode off for the session."""
@@ -413,6 +441,32 @@ def missing_headings(text, headings):
 
 def empty_sections(text, headings):
     return [h for h in headings if section_body(text, h) == ""]
+
+
+def brief_unit(path, data):
+    """The work folder for `<project>/.orchestra/<work>/brief.md`, or None for any other path."""
+    unit, rest = split_unit(path, data)
+    return unit if rest == ["brief.md"] else None
+
+
+PREAPPROVAL_KEYS = ("data", "deps", "git", "push", "github", "http", "ssh", "deploy")
+PREAPPROVAL_SECTION = "Decision rights"
+_PREAPPROVED = re.compile(
+    r"^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_`]*pre[- ]?approved[*_`]*[ \t]*[:：][*_`]*(.*)$",
+    re.I | re.M,
+)
+
+
+def preapproved_keys(text):
+    """The keys on the `Pre-approved:` line under `## Decision rights`. Other words are ignored."""
+    body = section_body(text, PREAPPROVAL_SECTION)
+    keys = set()
+    for m in _PREAPPROVED.finditer(body or ""):
+        for word in re.split(r"[\s,，、]+", m.group(1)):
+            word = word.strip("`*_~()[]{}.;:：'\"").lower()
+            if word in PREAPPROVAL_KEYS:
+                keys.add(word)
+    return keys
 
 
 _STATUS_LINE = re.compile(r"^\W*STATUS\W*[:：]\s*\W*([A-Za-z]+)", re.I)

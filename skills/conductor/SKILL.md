@@ -40,6 +40,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - Do not stop at the literal request. Keep going until it is clear what the user actually wants.
 - Ask one question per turn. Decide each next question from the last answer.
 - Write `.orchestra/<work>/brief.md` only after the interview is over.
+- The interview also settles which kinds of action the brief pre-approves. Write a key on the brief's `Pre-approved:` line only when the user approved that kind of action in an answer of their own. See "Pre-approved actions".
 - Then show the brief and always ask the same last question, alone in its turn, whatever the user said about asking: "Do you want me to wait until you confirm the brief?" When the interview left you nothing to ask, this is the only question.
   Reason: you cannot tell on your own that you have understood the intent. Only the user can say so.
 - The harness refuses the delegation until the user has replied after the brief last changed. If you change the brief later, ask the last question again.
@@ -126,9 +127,9 @@ Stop the affected work and ask the user when any of these applies.
 
 - **Scope change**: reaching the goal requires touching files or features outside the brief, or part of the goal has to be dropped or changed.
 - **Wrong premise**: a fact the brief assumes turns out to be false, or requirements conflict.
-- **Hard-to-undo actions**: deleting or migrating data, schema changes, rewriting history, deploying.
-- **Outward-facing actions**: pushing, opening a pull request, sending a message, writing to an external service.
-- **New burden**: adding a dependency or an external service, calls that cost money, work that needs credentials or permissions.
+- **Hard-to-undo actions that the brief does not pre-approve**: deleting or migrating data, schema changes, rewriting history, deploying.
+- **Outward-facing actions that the brief does not pre-approve**: pushing, opening a pull request, sending a message, writing to an external service.
+- **New burden**: adding a dependency or an external service that the brief does not name, calls that cost money, work that needs credentials or permissions.
 - **A choice the user will feel**: changes to a public interface or to existing behavior, design decisions that are expensive to reverse, trade-offs between security and performance.
 - **Relaxing the bar**: the acceptance criteria cannot be met, so they would have to be lowered or a test skipped.
 - **Repeated failure**: a task has used up its rework limit.
@@ -146,7 +147,43 @@ When it is unclear, ask two questions. Is it easy to undo? Is it inside the brie
 
 When you ask, give the situation, the options and what each leads to, and your recommendation. Leave running work that does not depend on the answer alone, and do not start work that does.
 
-The harness sends git commands that change repository state, commands that change dependencies, and commands that reach external services to the user for confirmation.
+The harness checks commands of these kinds against the brief. See "Pre-approved actions".
+
+## Pre-approved actions
+
+The harness stops eight kinds of command. The brief can pre-approve each kind for this work with a key on one line under `## Decision rights`:
+
+`Pre-approved: data, deps`
+
+| Key | Kind of command |
+|---|---|
+| `data` | Changes to data or a schema: migrations, seeds, schema loads |
+| `deps` | Installing or changing dependencies and packages |
+| `git` | Git commands that change repository state, except `git push` |
+| `push` | `git push` |
+| `github` | `gh` commands that create or change something |
+| `http` | A `curl` request that writes to another machine |
+| `ssh` | `ssh`, `scp`, `sftp` |
+| `deploy` | `kubectl`, `terraform`, `helm`, `docker push`, and the like |
+
+No key includes another. Write `Pre-approved: none` when nothing is pre-approved.
+
+- A key counts only while the user has replied since the brief last changed, the same condition as for delegating. It counts for you and for the implementation subagents. A read-only subagent never runs these commands.
+- A key lets a command through. It does not decide that the command is right. Run only what the work needs, against the target the brief means.
+- Pre-approval never overrides the project's own instructions. An action they forbid stays forbidden. A procedure they require around an action, such as a check before a commit, still applies.
+  Reason: the user wrote those instructions for every session. A line in one brief does not change them.
+- A key belongs to this work. It does not carry over to another brief.
+- A data command that names a production environment is not covered by `data`. It always goes to the user.
+
+When you need a kind of action that is not pre-approved:
+
+- For `data`, `deps` and `git`, the harness refuses the command. Add the key to the line in the brief, tell the user what will run and why, and ask them to confirm it. Run the command again after they answer. If they say no, remove the key and ask the fixed last question again, because the brief changed.
+- For `push`, `github`, `http`, `ssh` and `deploy`, the harness opens a confirmation prompt, and your turn does not continue until the user answers it. Before you run such a command, finish or delegate everything that does not depend on it.
+- In both cases, carry on with the work that does not depend on the answer.
+- A subagent that is refused one of these commands reports `BLOCKED`. Handle it the same way: get the key confirmed, then send the subagent on.
+- A command the harness cannot read is refused. Run it again as simpler, separate commands.
+
+Reason: the user is often away while the work runs. A question that the interview could have settled stops the work until they come back.
 
 ## Delegation constraints
 
@@ -184,7 +221,11 @@ Observable conditions that show the work is done.
 
 ## Decision rights
 What the conductor may decide, and what must go to the user.
+
+Pre-approved: none
 ```
+
+The `Pre-approved:` line lists the keys from "Pre-approved actions" that the user approved in the interview, or `none`.
 
 ### Task spec: `.orchestra/<work>/tasks/T01-short-name.md`
 
@@ -239,4 +280,4 @@ FILES: changed files
 QUESTION: the question, when BLOCKED
 ```
 
-For a `BLOCKED` question, first check whether the brief lets you answer it. If it does, send the answer to the same subagent so it can continue. If the decision is outside the brief, ask the user.
+For a `BLOCKED` question, first check whether the brief lets you answer it. If it does, send the answer to the same subagent so it can continue. If the decision is outside the brief, ask the user. When the subagent was refused a command that the brief does not pre-approve, follow "Pre-approved actions".

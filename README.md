@@ -68,12 +68,44 @@ To use Fable in ordinary mode, turn conductor mode off for that chat.
 
 The commands apply to the chat you type them in. Only you can turn the mode on or off. Fable cannot do it for itself.
 
+## Pre-approved actions
+
+Work often runs while you are away, so the conductor settles in the interview which kinds of action it may take without asking you again. It asks about each kind the work needs and writes the ones you approve on one line of the brief, under `## Decision rights`:
+
+`Pre-approved: data, deps`
+
+| Key | Kind of command |
+|---|---|
+| `data` | Changes to data or a schema: migrations, seeds, schema loads |
+| `deps` | Installing or changing dependencies and packages |
+| `git` | Git commands that change repository state, except `git push` |
+| `push` | `git push` |
+| `github` | `gh` commands that create or change something |
+| `http` | A `curl` request that writes to another machine |
+| `ssh` | `ssh`, `scp`, `sftp` |
+| `deploy` | `kubectl`, `terraform`, `helm`, `docker push`, and the like |
+
+- No key includes another. A line with `none`, or no line, pre-approves nothing.
+- The conductor writes a key only when you approved that kind of action in an answer of your own. Telling it to stop asking is not an approval.
+- A key counts once you have replied after the brief last changed, and it holds for that piece of work only.
+- Your project's instructions come first. The conductor does not ask you to pre-approve an action they forbid, and a procedure they require around an action, such as a check before a commit, still applies.
+- A data command that names a production environment is not covered by `data`. You are always asked.
+
+When a command's kind is not pre-approved:
+
+- Run by the conductor, for `data`, `deps` and `git`: it is refused. The conductor adds the key to the brief, tells you what it wants to run and why, and asks you. Meanwhile it keeps working on what does not depend on your answer.
+- Run by the conductor, for `push`, `github`, `http`, `ssh` and `deploy`: a confirmation prompt opens, and the conductor's turn waits until you answer it.
+- Run by a subagent that implements: it is refused, the subagent reports `BLOCKED`, and the conductor asks you.
+- A read-only subagent never runs these commands, pre-approved or not.
+
+The check reads the command line and is a tripwire for the common commands, not a sandbox. It does not look inside a container: a command run through `docker exec` is checked only for data and schema changes.
+
 ## What is in it
 
 | Kind | Name | Role |
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
-| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. Fable loads it before it asks you anything. No hook checks this |
+| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work. Fable loads it before it asks you anything. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
@@ -89,7 +121,7 @@ The enforcement below applies in a conductor session.
 |---|---|---|
 | 1. Fable is the orchestrator | Instructions | `skills/conductor/SKILL.md` |
 | 2. Understand the intent before working | Instructions (`skills/interview/SKILL.md`): one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
-| 3. Stop and ask when an exception comes up | Instructions. Commands that change repository state, dependencies, or external services go to the user | `scripts/guard_main.py` |
+| 3. Stop and ask when an exception comes up | Instructions. A command that changes data, dependencies, repository state, or something outside this machine runs without a question only when the brief pre-approves its kind. Otherwise it is refused or goes to you. See "Pre-approved actions" | `skills/interview/SKILL.md`, `scripts/guard_main.py` |
 | 4. Subagents use Opus or Sonnet, with model and effort chosen by the delegation rules | Agent types off the roster and `haiku` are refused. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a delegation | `scripts/guard_agent.py` |
 | 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |
 | 6. Subagents do not start subagents | Subagents have no `Agent` tool. A call is refused | `agents/*.md`, `scripts/guard_agent.py` |
