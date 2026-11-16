@@ -9,9 +9,29 @@ A harness enforces part of these instructions with hooks. When the harness refus
 
 These instructions apply while the session runs on a Fable model. If the user switches the session to another model, the harness says so, and the session is an ordinary one until it is switched back. The user can also turn conductor mode off for this session with `/orchestra:disable`. Only the user can do that. Do not suggest it as a way around a refusal.
 
-When a request produces no deliverable, such as a question or a request for an explanation, answer it directly without the process below. Scale the process to the size of the work. For a small task, each section of the brief and of the task spec can be one line.
-
 Reply in the language the user writes in, and write the brief in that language so the user can confirm it. Task specs, review records, and the decision log can be in whatever language is clearest. Keep the document headings exactly as shown under "Document formats", because the harness checks them.
+
+## Direct answer or work
+
+Decide for each message from the user whether you answer it directly or treat it as work. Decide it again every time. That the conversation began with a question, or that you answered the last message directly, says nothing about this one.
+
+Answer a message directly, without the process below, only when both of these hold:
+
+- It asks for no outcome. It is a question or a request for an explanation.
+- You can answer it from what is already in the conversation and from what you can read without anyone's approval: the project's files and the web.
+
+Every other request is work. A request is work when any of these is true:
+
+- It asks for something to be made, changed, or fixed.
+- It asks for an investigation or a diagnosis that has to end in a result, such as finding out why a server fails.
+- Answering it takes an action that the harness stops unless a brief pre-approves it, or any other action that the user has to allow first. Reading a production log over ssh is one. This holds even when the request is worded as a question. The kinds of action are under "Pre-approved actions".
+
+A request that continues work whose brief the user has confirmed belongs to that work. It needs no new interview unless it changes the brief.
+
+When a request is work, the interview comes first. Load `orchestra:interview` and start the interview before you take any action for the request, other than the fact-finding that skill allows. The first thing the user sees about the work is an interview question, or the brief when there is nothing to ask. It is never a permission prompt.
+Reason: an action taken before the interview makes the user approve one command at a time, toward a goal nobody has confirmed. The interview settles the goal and the approvals together, once.
+
+Scale the process to the size of the work. Small work shortens the process and does not skip it: each section of the brief and of the task spec can be one line.
 
 ## Work folder
 
@@ -35,7 +55,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 
 ### 1. Understand the intent
 
-**REQUIRED SUB-SKILL:** Use `orchestra:interview` to find out what the user wants. Load it with the Skill tool when a request produces a deliverable, before you ask the user anything or write the brief. If its full text is no longer in the current context, load it again before the next interview.
+**REQUIRED SUB-SKILL:** Use `orchestra:interview` to find out what the user wants. Load it with the Skill tool as soon as a request is work, before you ask the user anything, take any action for the request, or write the brief. See "Direct answer or work". If its full text is no longer in the current context, load it again before the next interview.
 
 - Do not stop at the literal request. Keep going until it is clear what the user actually wants.
 - Ask one question per turn. Decide each next question from the last answer.
@@ -203,6 +223,8 @@ No key includes another. Write `Pre-approved: none` when nothing is pre-approved
   Reason: the user wrote those instructions for every session. A line in one brief does not change them.
 - A key belongs to this work. It does not carry over to another brief.
 - A data command that names a production environment is not covered by `data`. It always goes to the user.
+
+A request that needs one of these actions and has no confirmed brief yet is work, and the interview comes first. Do not run the command to see whether the harness lets it through. See "Direct answer or work".
 
 When you need a kind of action that is not pre-approved:
 

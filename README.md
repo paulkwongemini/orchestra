@@ -47,6 +47,8 @@ After you install the plugin, the model of a chat decides its mode.
 
 Change the model in the middle of a chat, and the mode changes with it.
 
+In conductor mode, Fable decides for each message whether to answer it directly or to treat it as work. It answers directly only a question it can settle from the conversation, your project's files, and the web. Anything that asks for a result, or that needs an action you would have to allow, such as reading a server's logs over ssh, is work. Work starts with the interview: Fable asks what you want, and which kinds of action it may take, before it runs anything that needs your approval.
+
 Conductor mode is meant for work of some size. For a small task, switch the chat to another model and do it there.
 
 For the Fable conductor, we recommend starting at `high`, following [Anthropic's Claude Fable 5.2 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#calibrate-effort). Choose the level to suit the work:
@@ -124,7 +126,7 @@ These rules are instructions. No hook enforces them.
 | Kind | Name | Role |
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
-| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, and whether the work may use a worktree when it needs one. Fable loads it before it asks you anything. No hook checks this |
+| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, and whether the work may use a worktree when it needs one. Fable loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
@@ -139,7 +141,7 @@ The enforcement below applies in a conductor session.
 | Principle | Enforcement | File |
 |---|---|---|
 | 1. Fable is the orchestrator | Instructions | `skills/conductor/SKILL.md` |
-| 2. Understand the intent before working | Instructions (`skills/interview/SKILL.md`): one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
+| 2. Understand the intent before working | Instructions (`skills/conductor/SKILL.md`, `skills/interview/SKILL.md`): each message is judged anew as a direct answer or as work, the interview comes before any action that needs your approval, one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
 | 3. Stop and ask when an exception comes up | Instructions. A command that changes data, dependencies, repository state, or something outside this machine runs without a question only when the brief pre-approves its kind. Otherwise it is refused or goes to you. See "Pre-approved actions" | `skills/interview/SKILL.md`, `scripts/guard_main.py` |
 | 4. Subagents use Opus or Sonnet, with model and effort chosen by the delegation rules | Agent types off the roster and `haiku` are refused. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a delegation | `scripts/guard_agent.py` |
 | 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |

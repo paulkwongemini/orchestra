@@ -1,6 +1,6 @@
 ---
 name: interview
-description: The conductor's procedure for finding out what the user wants before any work starts: one question per turn, each next question decided by the last answer, then the brief. The conductor loads it when it starts to understand a request that produces a deliverable. Not for sessions on other models.
+description: The conductor's procedure for finding out what the user wants before any work starts: one question per turn, each next question decided by the last answer, then the brief. The conductor loads it as soon as a request is work, before it takes any action for the request. Not for sessions on other models.
 user-invocable: false
 ---
 
@@ -11,8 +11,11 @@ The interview ends in a brief that lets you make later decisions the way the use
 ## 1. Find the facts yourself
 
 - Before any question, read the codebase and the project's documents, and search the web when that helps.
+- Find facts only with actions that need nobody's approval: reading the project's files, running commands that only read them, and searching the web. Before the brief is confirmed, do not run a command of a kind that the harness stops unless the brief pre-approves it, and do not take any other action that the user has to allow first. Connecting to a server to read its logs is one.
+- When a fact can be found only with such an action, leave it unfound. Put the action on the list for step 5, and go on with the questions that do not depend on the fact. Find the fact after the user has confirmed the brief. If it then changes the brief, change the brief and ask the last question again.
+  Reason: an action that needs approval, taken before the first question, puts a permission prompt in front of the user before they have said what they want. Step 5 asks for the same permission once, with the reason.
 - A fact is something the environment can settle. A decision is something only the user can settle. Never ask the user for a fact. Never answer a decision for the user.
-- Work out which kinds of action the work will need that the harness stops unless the brief pre-approves them: changing data or a schema, changing dependencies, changing git state, pushing, changing things on GitHub, writing to another machine over HTTP, using ssh, deploying. Count the commands your own review will run, such as a migration or a seed to check a result, or installing dependencies to run the tests. Read what the project's instruction files, such as `AGENTS.md` and `CLAUDE.md`, say about each of these actions, and about worktrees.
+- Work out which kinds of action the work will need that the harness stops unless the brief pre-approves them: changing data or a schema, changing dependencies, changing git state, pushing, changing things on GitHub, writing to another machine over HTTP, using ssh, deploying. Count the fact-finding you left for after the brief, and the commands your own review will run, such as a migration or a seed to check a result, or installing dependencies to run the tests. Read what the project's instruction files, such as `AGENTS.md` and `CLAUDE.md`, say about each of these actions, and about worktrees.
 - Scale the effort to the request. For a small request, this can take a minute and leave nothing to ask.
 
 ## 2. Lay out the decisions as a tree
