@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -1423,6 +1424,265 @@ class PreapprovalTest(HookTest):
         self.set_transcript([request(SONNET)])
         for cmd in (FROZEN_B, FROZEN_C, FROZEN_D, 'echo "unterminated', "git push origin main", "npm install"):
             self.assertEqual(self.bash(cmd), "allow", cmd)
+
+
+class ConductorWritesTest(HookTest):
+    """Principle 8: the project files the confirmed brief lets the conductor write itself."""
+
+    brief = PreapprovalTest.brief
+    spoke = PreapprovalTest.spoke
+    activate = PreapprovalTest.activate
+    confirmed = PreapprovalTest.confirmed
+    reason = PreapprovalTest.reason
+
+    LINE = "Conductor writes: src/app.py"
+
+    def write_to(self, path, tool="Write"):
+        key = "notebook_path" if tool == "NotebookEdit" else "file_path"
+        return self.verdict("guard_main.py", self.main(tool, {key: path, "content": "x"}))
+
+    def writes(self, path):
+        """Whether the conductor's Write and Edit to the path are allowed, as one verdict."""
+        write, edit = self.write_to(path), self.write_to(path, "Edit")
+        self.assertEqual(write, edit, path)
+        return write
+
+    def test_listed_file_is_allowed(self):
+        self.confirmed(self.LINE)
+        self.assertEqual(self.writes("src/app.py"), "allow")
+        self.assertEqual(self.writes(os.path.join(self.proj, "src", "app.py")), "allow")
+        self.write("src/app.py", "x")
+        self.assertEqual(self.writes("src/app.py"), "allow")
+        self.assertEqual(self.writes("src/../src/app.py"), "allow")
+
+    def test_relative_entry_is_resolved_against_the_project(self):
+        self.write("src/app.py", "x")
+        self.confirmed(self.LINE)
+        payload = self.main("Write", {"file_path": "app.py", "content": "x"})
+        payload["cwd"] = os.path.join(self.proj, "src")
+        self.assertEqual(self.verdict("guard_main.py", payload), "allow")
+        payload["tool_input"]["file_path"] = "src/app.py"
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+
+    def test_absolute_and_home_entries(self):
+        self.confirmed("Conductor writes: %s" % os.path.join(self.proj, "docs", "guide.md"))
+        self.assertEqual(self.writes("docs/guide.md"), "allow")
+        with unittest.mock.patch.dict(os.environ, {"HOME": self.tmp}):
+            self.confirmed("Conductor writes: ~/proj/docs/a.md")
+            self.assertEqual(self.writes("docs/a.md"), "allow")
+            self.assertEqual(self.writes("docs/guide.md"), "deny")
+
+    def test_unlisted_file_is_denied_with_the_way(self):
+        self.confirmed(self.LINE)
+        for path in ("src/other.py", "README.md"):
+            payload = self.main("Write", {"file_path": path, "content": "x"})
+            self.assertEqual(self.verdict("guard_main.py", payload), "deny", path)
+            why = self.reason(payload)
+            self.assertIn("You cannot edit", why)
+            self.assertIn("delegate this change", why)
+            self.assertIn("`Conductor writes:`", why)
+            self.assertIn("## Decision rights", why)
+            self.assertIn("does not list this file", why)
+            self.assertIn("Code, configuration and tests are delegated", why)
+
+    def test_brief_newer_than_the_last_turn(self):
+        self.spoke(1000)
+        self.brief(self.LINE, at=2000)
+        self.activate()
+        payload = self.main("Write", {"file_path": "src/app.py", "content": "x"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        why = self.reason(payload)
+        self.assertIn("lists this file", why)
+        self.assertIn("has not confirmed this version of the brief", why)
+        self.assertIn("ask them", why)
+        why = self.reason(self.main("Write", {"file_path": "src/other.py", "content": "x"}))
+        self.assertIn("does not list this file", why)
+        self.spoke(3000)
+        self.assertEqual(self.verdict("guard_main.py", payload), "allow")
+
+    def test_no_user_turn_recorded(self):
+        self.brief(self.LINE)
+        self.activate()
+        payload = self.main("Write", {"file_path": "src/app.py", "content": "x"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        why = self.reason(payload)
+        self.assertIn("no user turn is recorded", why)
+        self.assertIn("has not confirmed this version of the brief", why)
+
+    def test_no_active_work_folder(self):
+        self.brief(self.LINE)
+        self.spoke(3000)
+        payload = self.main("Write", {"file_path": "src/app.py", "content": "x"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        why = self.reason(payload)
+        self.assertIn("no active work folder", why)
+        self.assertIn("`Conductor writes:`", why)
+        self.assertEqual(self.bash("echo x > src/app.py"), "deny")
+
+    def test_active_work_folder_without_a_brief(self):
+        self.confirmed(self.LINE)
+        os.remove(os.path.join(self.proj, UNIT, "brief.md"))
+        payload = self.main("Write", {"file_path": "src/app.py", "content": "x"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+        self.assertIn("has no brief", self.reason(payload))
+
+    def test_brief_of_another_work_folder_does_not_count(self):
+        self.brief(self.LINE, unit=OTHER_UNIT)
+        self.brief("")
+        self.spoke(3000)
+        self.activate(UNIT)
+        self.assertEqual(self.writes("src/app.py"), "deny")
+        self.activate(OTHER_UNIT)
+        self.assertEqual(self.writes("src/app.py"), "allow")
+        self.activate(UNIT)  # the latest record wins
+        self.assertEqual(self.writes("src/app.py"), "deny")
+
+    def test_unreadable_brief_lists_nothing(self):
+        if os.geteuid() == 0:
+            self.skipTest("root reads any file")
+        self.confirmed(self.LINE)
+        brief = os.path.join(self.proj, UNIT, "brief.md")
+        os.chmod(brief, 0)
+        self.addCleanup(os.chmod, brief, 0o644)
+        self.assertEqual(self.writes("src/app.py"), "deny")
+
+    def test_lines_that_list_nothing(self):
+        for line in ("Conductor writes: none", "Conductor writes: `None`", "Conductor writes:",
+                     "Conductor writes: , ,", "", "Not conductor writes: src/app.py",
+                     "Conductor may write: src/app.py"):
+            with self.subTest(line=line):
+                self.confirmed(line)
+                self.assertEqual(self.writes("src/app.py"), "deny", line)
+                self.assertEqual(self.writes("none"), "deny", line)
+
+    def test_line_outside_decision_rights_does_not_count(self):
+        self.confirmed("", text=BRIEF.replace("Do not change the public API.", self.LINE))
+        self.assertEqual(self.writes("src/app.py"), "deny")
+
+    def test_entries_that_name_no_single_project_file(self):
+        self.write("src/app.py", "x")
+        outside = "/etc/orchestra-test-missing.txt"
+        cases = [
+            ("src/*.py", ["src/*.py"], []),
+            ("src/app.p?", ["src/app.p?"], []),
+            ("src/[a]pp.py", ["src/[a]pp.py"], []),
+            ("src", [], ["rm -rf src", "cp /tmp/orchestra-a.py src", "echo x | tee src"]),
+            ("src/", [], ["rm -rf src/", "cp /tmp/orchestra-a.py src/"]),
+            ("src/new/", ["src/new"], ["touch src/new"]),
+            (".", ["."], ["rm -rf ."]),
+            (outside, [outside], []),
+            (os.path.relpath(outside, os.path.realpath(self.proj)), [outside], []),
+            ("~/.orchestra-test-missing/file.txt", [os.path.expanduser("~/.orchestra-test-missing/file.txt")], []),
+            (UNIT + "/reports/T01.md", [UNIT + "/reports/T01.md"], []),
+            (UNIT + "/reports/", [UNIT + "/reports/T01.md"], []),
+        ]
+        for entry, targets, cmds in cases:
+            with self.subTest(entry=entry):
+                self.confirmed("Conductor writes: " + entry)
+                for target in targets + ["src/app.py"]:
+                    self.assertEqual(self.writes(target), "deny", target)
+                for cmd in cmds:
+                    self.assertEqual(self.bash(cmd), "deny", cmd)
+        self.confirmed("Conductor writes: src/*.py, src/app.py")
+        self.assertEqual(self.writes("src/app.py"), "allow")
+        self.assertEqual(self.writes("src/*.py"), "deny")
+
+    def test_orchestra_rules_stay_as_they_are(self):
+        self.confirmed("Conductor writes: %s/reports/T01.md, %s/decisions.md" % (UNIT, UNIT))
+        self.assertEqual(self.writes(UNIT + "/reports/T01.md"), "deny")
+        why = self.reason(self.main("Write", {"file_path": UNIT + "/reports/T01.md", "content": "x"}))
+        self.assertIn("Reports are written by subagents", why)
+        self.assertEqual(self.writes(UNIT + "/decisions.md"), "allow")
+        self.assertEqual(self.writes(UNIT + "/tasks/T02-next.md"), "allow")
+        self.assertEqual(self.bash("echo x > %s/reports/T01.md" % UNIT), "deny")
+
+    def test_line_forms(self):
+        listed = [
+            ("- Conductor writes: src/app.py", ["src/app.py"]),
+            ("* **Conductor writes:** src/app.py, docs/guide.md", ["src/app.py", "docs/guide.md"]),
+            ("**Conductor writes**: `src/app.py`, `docs/guide.md`", ["src/app.py", "docs/guide.md"]),
+            ("`Conductor writes`: `src/app.py`", ["src/app.py"]),
+            ("_Conductor writes_: src/app.py", ["src/app.py"]),
+            ("conductor writes： src/app.py", ["src/app.py"]),
+            ("1. CONDUCTOR WRITES: docs/guide.md，src/app.py", ["src/app.py", "docs/guide.md"]),
+            ("Conductor writes: docs/guide.md、 'src/app.py'", ["src/app.py", "docs/guide.md"]),
+            ('Conductor writes: "src/app.py" , *docs/guide.md*', ["src/app.py", "docs/guide.md"]),
+            ("Conductor writes: none, src/app.py", ["src/app.py"]),
+            ("Conductor writes: src/app.py\nConductor writes: docs/guide.md", ["src/app.py", "docs/guide.md"]),
+            ("Conductor writes: docs/user guide.md, src/app.py", ["docs/user guide.md", "src/app.py"]),
+            ("- Conductor writes: `docs/user guide.md`", ["docs/user guide.md"]),
+        ]
+        for line, paths in listed:
+            with self.subTest(line=line):
+                self.confirmed(line)
+                for path in paths:
+                    self.assertEqual(self.writes(path), "allow", path)
+                for path in ({"src/app.py", "docs/guide.md", "docs/user guide.md"} - set(paths)) | {"docs/user", "guide.md"}:
+                    self.assertEqual(self.writes(path), "deny", path)
+
+    def test_entries_keep_their_underscores(self):
+        for line in ("Conductor writes: _config.yml, __init__.py, notes_",
+                     "- **Conductor writes:** `_config.yml`, `__init__.py`, `notes_`",
+                     "Conductor writes:_config.yml\nConductor writes: __init__.py\nConductor writes: notes_"):
+            with self.subTest(line=line):
+                self.confirmed(line)
+                for path in ("_config.yml", "__init__.py", "notes_"):
+                    self.assertEqual(self.write_to(path), "allow", path)
+                for path in ("config.yml", "init__.py", "__init__", "notes"):
+                    self.assertEqual(self.write_to(path), "deny", path)
+
+    def test_brief_body_in_another_language(self):
+        self.confirmed("- `Conductor writes`: `src/app.py`", text=BRIEF_KO)
+        self.assertEqual(self.writes("src/app.py"), "allow")
+        self.assertEqual(self.writes("src/other.py"), "deny")
+
+    def test_notebook(self):
+        self.confirmed("Conductor writes: analysis.ipynb")
+        self.assertEqual(self.write_to("analysis.ipynb", "NotebookEdit"), "allow")
+        self.assertEqual(self.write_to("other.ipynb", "NotebookEdit"), "deny")
+
+    def test_shell(self):
+        self.write("src/app.py", "x")
+        self.confirmed(self.LINE)
+        for cmd in ("echo x > src/app.py", "echo x >> src/app.py", "echo x | tee src/app.py",
+                    "cp /tmp/orchestra-a.py src/app.py"):
+            self.assertEqual(self.bash(cmd), "allow", cmd)
+        for cmd in ("echo x > src/other.py", "echo x | tee src/app.py src/other.py",
+                    "cp src/app.py src/other.py", "sed -i 's/a/b/' src/app.py", "perl -pi -e 's/a/b/' src/app.py",
+                    "vim src/app.py", "patch src/app.py < fix.diff",
+                    "python3 -c \"open('src/app.py','w').write('x')\"", "find src -name app.py -delete"):
+            self.assertEqual(self.bash(cmd), "deny", cmd)
+
+    def test_readonly_subagent(self):
+        self.confirmed(self.LINE)
+        for tool in ("Write", "Edit"):
+            payload = self.sub("opus-analyst", tool, {"file_path": "src/app.py", "content": "x"})
+            self.assertEqual(self.verdict("guard_main.py", payload), "deny", tool)
+        payload = self.sub("opus-analyst", "Bash", {"command": "echo x > src/app.py"})
+        self.assertEqual(self.verdict("guard_main.py", payload), "deny")
+
+    def test_implementation_subagent(self):
+        self.confirmed("Conductor writes: src/app.py, %s/brief.md, %s/reviews/T01.md" % (UNIT, UNIT))
+        for role in ("sonnet-builder", "opus-engineer"):
+            def run(tool, path):
+                return self.verdict("guard_main.py", self.sub(role, tool, {"file_path": path}))
+            self.assertEqual(run("Write", "src/app.py"), "allow", role)
+            self.assertEqual(run("Write", "src/other.py"), "allow", role)
+            self.assertEqual(run("Write", UNIT + "/reports/T01.md"), "allow", role)
+            self.assertEqual(run("Edit", UNIT + "/tasks/T01-login-fix.md"), "deny", role)
+            self.assertEqual(run("Write", UNIT + "/reviews/T01.md"), "deny", role)
+            self.assertEqual(run("Write", UNIT + "/brief.md"), "deny", role)
+            self.assertEqual(run("Write", UNIT + "/files/T01/run.rb"), "allow", role)
+            self.assertEqual(run("Edit", UNIT + "/files/T01/run.rb"), "allow", role)
+            self.assertEqual(run("Write", UNIT + "/scratch/run.rb"), "deny", role)
+            self.assertEqual(run("Write", ".orchestra/files/run.rb"), "deny", role)
+
+    def test_sessions_outside_the_harness_are_left_alone(self):
+        self.confirmed(self.LINE)
+        self.set_transcript([request(SONNET), response(SONNET)])
+        for path in ("src/app.py", "src/other.py", UNIT + "/reports/T01.md"):
+            self.assertEqual(self.writes(path), "allow", path)
+        self.assertEqual(self.bash("sed -i 's/a/b/' src/app.py"), "allow")
 
 
 class ReportGateTest(HookTest):

@@ -52,7 +52,20 @@ The work often runs while the user is away. An action that the brief does not pr
 
 Reason: only the user can give this permission, and the interview is the last moment they are sure to be present.
 
-## 6. Settle whether the work uses a worktree
+## 6. Settle which files you write yourself
+
+The conductor's instructions say under "Files you write yourself" which kinds of file may go on the brief's `Conductor writes:` line: a file whose wording is the design, and a document in which you decide each statement that changes.
+
+- From what you found in step 1, list the files of those two kinds that the work will change. Include the documents that you expect the close of each task group to change.
+- When the list is empty, do not ask. Write `Conductor writes: none`.
+- Otherwise ask one question. Name each file, say why you would write it yourself, and say what happens if the user does not approve it: a subagent writes it from a task spec that already holds the text, which costs more tokens and changes nothing in the result. The question may list several files for the user to tick. That is still one question.
+- A path goes on the line only when the user approved that file in their own answer. Never write a path as an assumption, and never take "stop asking" or "do whatever it takes" as approval. If the user ends the interview before this is settled, write `Conductor writes: none`.
+- Do not offer code, configuration, or tests. They stay with the subagents even when the user would let you write them.
+- Where the project's instructions say that a file must not be edited, or who may edit it, do not offer that file.
+
+Reason: the user decides which files go without a second writer and an independent review, and the interview is the last moment they are sure to be present.
+
+## 7. Settle whether the work uses a worktree
 
 The default is no worktree: every subagent works in the user's working directory. The conductor's instructions say under "Working in one directory" when a worktree is needed.
 
@@ -63,7 +76,7 @@ The default is no worktree: every subagent works in the user's working directory
 
 Reason: the user decides whether a second checkout is worth what it costs, and the interview is the moment to ask.
 
-## 7. When to stop asking
+## 8. When to stop asking
 
 - Stop when every decision still open is one you may make: an implementation detail inside the scope, easy to undo. The test is the one in the conductor's instructions under "When to ask the user".
 - Write each of those decisions into the brief as an assumption, under the heading it belongs to, so the user can see it and change it.
@@ -71,16 +84,16 @@ Reason: the user decides whether a second checkout is worth what it costs, and t
 
 Reason: every question costs the user a turn. A question whose answer would not change the design or the acceptance criteria is not worth one.
 
-## 8. Write the brief
+## 9. Write the brief
 
 - Write `.orchestra/<work>/brief.md` only now, after the last answer. Do not write it while questions are still open.
 - Its format is in the conductor's instructions under "Document formats". Write it in the user's language.
 - A good brief lets you make most later decisions the way the user would.
 
-## 9. Show the brief and ask the last question
+## 10. Show the brief and ask the last question
 
 - If a tool that shows a file to the user is available (in the Claude desktop app, the one that opens a file in a side pane), open the brief with it. If there is none, give the path of the brief.
-- In the chat, write two or three lines: what will be built, the assumptions you made without asking, any extras the brief proposes, and which kinds of action the brief pre-approves. Do not paste the brief.
+- In the chat, write two or three lines: what will be built, the assumptions you made without asking, any extras the brief proposes, which kinds of action the brief pre-approves, and which files you will write yourself. Do not paste the brief.
 - Then ask the one fixed last question, alone in its own turn: "Do you want me to wait until you confirm the brief?" Offer two options: start now, or review the brief first.
 - Do not ask a separate question such as "Is my understanding correct?". The brief is what the user confirms.
   Reason: a yes to a summary confirms nothing. The user can only judge the brief itself.

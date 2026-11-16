@@ -2,8 +2,12 @@
 """PreToolUse(Edit|Write|NotebookEdit|Bash): enforce who may write what.
 
 Principle 8  The conductor does not implement.
-  - Conductor (the main conversation of a session on a Fable model): writes only its own
-    documents inside `.orchestra/`. It does not change files from the shell.
+  - Conductor (the main conversation of a session on a Fable model): writes its own documents
+    inside `.orchestra/`, and outside it only the project files that the brief of the session's
+    active work folder lists on the `Conductor writes:` line under `## Decision rights`, once
+    the user has spoken since the brief last changed. An entry names one file: a glob, a
+    directory, a path outside the project or inside `.orchestra/` names nothing. From the shell
+    it changes no other file, and it never edits a file in place.
   - Read-only subagents: write only their own report and working files under
     `.orchestra/<work>/files/`.
   - Implementation subagents: inside `.orchestra/`, write only their own report and working
@@ -230,14 +234,18 @@ def _home_claude():
     return os.path.realpath(os.path.expanduser("~/.claude"))
 
 
-def conductor_may_write(path, data):
+def conductor_may_write(path, data, approval=None):
     home = _home_claude()
     if c.inside(path, os.path.join(home, "plans")):
         return True
     if c.inside(path, os.path.join(home, "projects")) and "/memory/" in path + "/":
         return True
     if c.inside(path, c.project_dir(data)):
-        return c.inside(path, c.work_dir(data)) and not c.in_reports(path, data)
+        if c.inside(path, c.work_dir(data)):
+            return not c.in_reports(path, data)
+        if approval is None:
+            approval = brief_approval(data)
+        return path in approval.files
     return any(c.inside(path, root) for root in c.temp_roots(data))
 
 
@@ -254,17 +262,20 @@ def impl_may_write(path, data):
 
 
 class Approval:
-    """What the brief in the session's active work folder pre-approves.
+    """What the brief in the session's active work folder pre-approves, and which project files
+    it lets the conductor write.
 
     state: `no-work` (no active work folder), `no-brief`, `no-turn` (no user turn recorded),
     `newer` (the brief changed after the user last spoke), or `confirmed`.
     """
 
-    def __init__(self, unit, listed, state):
+    def __init__(self, unit, listed, state, listed_files=frozenset()):
         self.unit = unit
         self.listed = listed
         self.state = state
         self.keys = listed if state == "confirmed" else set()
+        self.listed_files = listed_files
+        self.files = listed_files if state == "confirmed" else frozenset()
 
     @property
     def shown(self):
@@ -278,7 +289,9 @@ def brief_approval(data):
     brief = os.path.join(unit, "brief.md")
     if not os.path.isfile(brief):
         return Approval(unit, set(), "no-brief")
-    listed = c.preapproved_keys(c.read_text(brief))
+    text = c.read_text(brief)
+    listed = c.preapproved_keys(text)
+    files = frozenset(c.conductor_write_files(text, data))
     # Read the time after the text, so a change in between counts as unconfirmed.
     try:
         changed = os.path.getmtime(brief)
@@ -289,10 +302,10 @@ def brief_approval(data):
     # is recorded. A pre-approved action runs with nobody present to confirm it, so it must not
     # be approved because a record is missing.
     if turn is None:
-        return Approval(unit, listed, "no-turn")
+        return Approval(unit, listed, "no-turn", files)
     if changed > turn:
-        return Approval(unit, listed, "newer")
-    return Approval(unit, listed, "confirmed")
+        return Approval(unit, listed, "newer", files)
+    return Approval(unit, listed, "confirmed", files)
 
 
 class Ctx:
@@ -365,7 +378,7 @@ class Ctx:
             return False  # the target is the output of a command substitution, so it is unknown
         path = c.resolve(text, self.data)
         if self.role == "conductor":
-            return conductor_may_write(path, self.data)
+            return conductor_may_write(path, self.data, self.approval)
         if self.role == "readonly":
             return readonly_may_write(path, self.data)
         return impl_may_write(path, self.data)
@@ -1260,6 +1273,35 @@ def handle_bash(cmd, data, role):
     c.ask(reason)
 
 
+WRITES_EXCEPTION = (
+    "The exception is a file whose wording is the design (a skill, a prompt, an agent's "
+    "instructions), or a document whose changed statements you have decided: you may write it "
+    "yourself when the brief lists its path on the `Conductor writes:` line under "
+    "`## Decision rights` and the user has confirmed the brief. Code, configuration and tests "
+    "are delegated."
+)
+
+
+def conductor_write_refusal(path, approval):
+    """How the `Conductor writes:` exception applies to a project file the conductor may not write."""
+    a = approval
+    show_and_ask = "Show the user the brief, ask them, and write the file after they answer."
+    if a.state == "no-work":
+        return ("%s This session has no active work folder, so no brief lists this file. Read or "
+                "write the work's brief %s first." % (WRITES_EXCEPTION, a.shown))
+    if a.state == "no-brief":
+        return "%s The active work folder has no brief %s, so no brief lists this file." % (WRITES_EXCEPTION, a.shown)
+    if path in a.listed_files and a.state == "newer":
+        return ("The brief %s lists this file on its `Conductor writes:` line, but it was written or "
+                "changed after the user last spoke, so the user has not confirmed this version of the "
+                "brief. %s" % (a.shown, show_and_ask))
+    if path in a.listed_files and a.state == "no-turn":
+        return ("The brief %s lists this file on its `Conductor writes:` line, but no user turn is "
+                "recorded for this session, so the user has not confirmed this version of the brief. "
+                "%s" % (a.shown, show_and_ask))
+    return "The brief %s does not list this file. %s" % (a.shown, WRITES_EXCEPTION)
+
+
 def handle_write(path_text, data, role):
     path = c.resolve(path_text, data)
     if role == "conductor":
@@ -1272,7 +1314,10 @@ def handle_write(path_text, data, role):
             c.allow()
         if c.in_reports(path, data):
             c.deny("Reports are written by subagents. The conductor cannot write or edit a report (Principle 7).")
-        c.deny("You cannot edit `%s` directly. %s" % (path_text, WHY["conductor"]))
+        refusal = "You cannot edit `%s` directly. %s" % (path_text, WHY["conductor"])
+        if c.inside(path, c.project_dir(data)) and not c.inside(path, c.work_dir(data)):
+            refusal += " " + conductor_write_refusal(path, brief_approval(data))
+        c.deny(refusal)
     if role == "readonly":
         if readonly_may_write(path, data):
             c.allow()

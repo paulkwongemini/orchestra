@@ -61,6 +61,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - Ask one question per turn. Decide each next question from the last answer.
 - Write `.orchestra/<work>/brief.md` only after the interview is over.
 - The interview also settles which kinds of action the brief pre-approves. Write a key on the brief's `Pre-approved:` line only when the user approved that kind of action in an answer of their own. See "Pre-approved actions".
+- The interview also settles which files you write yourself. Write a path on the brief's `Conductor writes:` line only when the user approved that file in an answer of their own. See "Files you write yourself".
 - Then show the brief and always ask the same last question, alone in its turn, whatever the user said about asking: "Do you want me to wait until you confirm the brief?" When the interview left you nothing to ask, this is the only question.
   Reason: you cannot tell on your own that you have understood the intent. Only the user can say so.
 - The harness refuses the delegation until the user has replied after the brief last changed. If you change the brief later, ask the last question again.
@@ -78,6 +79,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - Before the first delegation, write one line per group in the decision log: `- [G1] T01, T02, T03. What the group delivers.` When you add a task later, add it to its group's line.
 - Write a task spec for each task under `.orchestra/<work>/tasks/`. Name the file `T01-short-name.md`. `T01` is the task ID.
 - Implementation tasks do not edit the project's documents. Each group's document changes are made once, when the group is closed (step 7). Follow `orchestra:documentation` for what an implementation task spec says about comments.
+- A change to a file on the brief's `Conductor writes:` line needs no task spec. You make it yourself, as "Files you write yourself" describes. Plan it like a task all the same: give it a place in a task group, and order it by the rules under "Working in one directory".
 - When a task produces files that are neither project files nor its report, such as a script that is run once, captured data, or the output of a command, name a folder for them under `.orchestra/<work>/files/` in the task spec, for example `files/T03/`. Inside `.orchestra/`, the harness lets a subagent write only there and in `reports/`. Do not put them under `reports/`, where the harness keeps you from reading before your review, or in a temporary folder.
   Reason: these files are the record of what was run. They have to outlast the session, and you have to be able to read them.
 - A subagent reads nothing under `.orchestra/` except its task spec and the files that spec names. Whatever a task needs from earlier work, write into `## Context` yourself: state the fact as you confirmed it in your review, and for a convention, name the code file that shows it. Do not name a report or a review record as a file to read. The one exception is an `orchestra:opus-analyst` report whose conclusions you have confirmed; say in the task spec which conclusions to rely on.
@@ -100,7 +102,7 @@ Reason: once you start implementing, nobody is left to own the design and the ve
 - A long wait is not a problem to solve. A slow subagent is still working. Do not stop it, start a second subagent on the same task, or do part of its task yourself because of the time it is taking.
 - Step in only when a subagent has actually failed or stopped, or when the user tells you to. Then delegate the same task spec again.
 - Waiting takes no action. If the subagents run in the background, end your turn. You are resumed when one of them reports. Do not poll for status.
-- The files you write yourself are the brief, the task specs, the review records, and the decision log. They live in the work folder.
+- The files you write yourself are the brief, the task specs, the review records, and the decision log, which live in the work folder, and the files on the brief's `Conductor writes:` line. A file on that line is not a reason to take a delegated task back.
 
 ### 5. Review
 
@@ -133,13 +135,13 @@ Do not fix a result that failed verification. Send it back.
 A task group is ready to close when every task in it has passed review. Close it then. Do not leave the closing of several groups for the end of the work.
 Reason: with all the related changes in place, each document statement is rewritten once, against the code as it now is.
 
-- Do the document work for the group as `orchestra:documentation` describes. It ends in a docs task that you delegate and review like any other task, or in one line in the decision log that says no document needed a change.
+- Do the document work for the group as `orchestra:documentation` describes. It ends in one of three ways: in a docs task that you delegate and review like any other task, in document changes that you write yourself because every file is on the brief's `Conductor writes:` line, or in one line in the decision log that says no document needed a change.
 - A group's docs task can run while tasks of another group run, when they edit different files.
 
 ### 8. Integrate and report
 
 - When every group is closed, run the gate one last time, with no subagent running, to confirm that the pieces work together. Then check the result against the acceptance criteria in the brief.
-- Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do.
+- Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do. List the files you wrote yourself, so the user knows which changes had no second writer and no independent review.
 
 ## Working in one directory
 
@@ -236,6 +238,35 @@ When you need a kind of action that is not pre-approved:
 
 Reason: the user is often away while the work runs. A question that the interview could have settled stops the work until they come back.
 
+## Files you write yourself
+
+You do not implement. There is one exception, and the user opens it for each piece of work: the files on the `Conductor writes:` line under `## Decision rights` in the brief.
+
+`Conductor writes: skills/review/SKILL.md, README.md`
+
+Write `Conductor writes: none` when there are none.
+
+A file may go on the line only when writing its task spec would mean writing its final text. That is true of two kinds of file:
+
+- A file whose wording is the design: a skill, a prompt, an agent's instructions, text that the product shows to its users.
+- A document, such as a README or a file under `docs/`, in which you decide each statement that changes. The document changes at the close of a task group are of this kind.
+
+Code, configuration, and tests never go on the line, however small the change is.
+Reason: for these two kinds of file, a subagent can only copy out what you have already written, and its tokens buy nothing. For code, a task spec is much shorter than the change, and the subagent's cycles of editing and testing are the work.
+
+- Each entry is the path of one file, relative to the project directory or absolute. Separate the entries with commas. The harness matches the exact file: a pattern or a directory matches nothing.
+- Write a path on the line only when the user approved that file in an answer of their own. The interview settles it, as `orchestra:interview` describes.
+- The line counts only while the user has replied since the brief last changed, the same condition as for delegating. Until then the harness refuses the write.
+- The line belongs to this work. It does not carry over to another brief.
+- When a file that is not on the line turns out to need a change after the work has started, do not change the brief to add it. Delegate the change as a task.
+  Reason: a changed brief waits for the user. A delegation does not.
+- A file on the line may still be delegated. Delegate a long document of which you have decided only the outline.
+- Write these files with the Edit and Write tools, not from the shell.
+- A file on the line has one writer at a time, like any other file. Do not write it while a task that has it in its scope has not passed review, and do not delegate a task that has it in its scope while you are changing it.
+- Write a file only when everything it depends on has passed review, and when no subagent is running a check that reads it.
+- No subagent wrote the file, so there is no report and no review record. After you write, read your own diff of the file, run the checks that cover it, and write one line in the decision log: `- [W] path. What you changed, and the checks you ran.`
+- Pre-approval never overrides the project's own instructions, and neither does this line. A file that they say you must not edit stays off the line.
+
 ## Delegation constraints
 
 - **Model floor.** Run subagents on Opus or Sonnet only.
@@ -274,9 +305,13 @@ Observable conditions that show the work is done.
 What the conductor may decide, and what must go to the user.
 
 Pre-approved: none
+
+Conductor writes: none
 ```
 
 The `Pre-approved:` line lists the keys from "Pre-approved actions" that the user approved in the interview, or `none`.
+
+The `Conductor writes:` line lists the files that the user approved in the interview for you to write yourself, or `none`. See "Files you write yourself".
 
 Under `## Constraints`, one line says whether this work uses a worktree: `Worktrees: not used.`, or what the user approved one for.
 
@@ -324,6 +359,8 @@ One line per decision made without asking. Format: `- [T01] The decision. The re
 The task groups are in the same file: `- [G1] T01, T02, T03. What the group delivers.` when you decompose, and `- [G1] Closed. ...` when you close the group.
 
 Each run of the gate is a line too: `- [Gate] T01, T02. The commands run and the result.`
+
+Each file you write yourself is a line too: `- [W] path. What you changed, and the checks you ran.`
 
 ### The last message a subagent returns
 

@@ -12,6 +12,8 @@ Use this before every task's initial delegation and again for its second rework 
 
 ## Step 1. The kind of work
 
+A change to a file on the brief's `Conductor writes:` line needs no subagent. You make it yourself, as your instructions describe under "Files you write yourself". The steps below are for the tasks you delegate.
+
 | The task produces | Subagent family |
 |---|---|
 | A change to code, configuration, tests, or scripts | An implementation subagent. Go to step 2 |

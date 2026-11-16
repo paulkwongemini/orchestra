@@ -42,7 +42,7 @@ claude --plugin-dir /path/to/orchestra
 
 After you install the plugin, the model of a chat decides its mode.
 
-- **The model is Fable: conductor mode.** Fable works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself. Each time a group of related tasks is done, it has the project's documents brought up to date.
+- **The model is Fable: conductor mode.** Fable works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself, except the files you approve for it in the brief. See "Files the conductor writes itself". Each time a group of related tasks is done, it has the project's documents brought up to date.
 - **The model is anything else: ordinary mode.** The plugin does nothing.
 
 Change the model in the middle of a chat, and the mode changes with it.
@@ -103,6 +103,19 @@ When a command's kind is not pre-approved:
 
 The check reads the command line and is a tripwire for the common commands, not a sandbox. It does not look inside a container: a command run through `docker exec` is checked only for data and schema changes.
 
+## Files the conductor writes itself
+
+The conductor delegates every change to your project, with one exception that you open for each piece of work. For some files the task spec would already hold the final text, and a subagent could only copy it out. The conductor may write such a file itself when you approve it in the interview. It writes the approved paths on one line of the brief, under `## Decision rights`:
+
+`Conductor writes: skills/review/SKILL.md, README.md`
+
+- Two kinds of file may go on the line: a file whose wording is the design, such as a skill, a prompt, or an agent's instructions, and a document in which the conductor decides each statement that changes. Code, configuration, and tests are always delegated.
+- An entry is the path of one file, relative to the project directory or absolute. A pattern or a directory matches nothing. A path outside the project or inside `.orchestra/` matches nothing.
+- The conductor writes a path on the line only when you approved that file in an answer of your own.
+- The line counts once you have replied after the brief last changed, and it holds for that piece of work only.
+- A file the conductor writes has no second writer and no independent review. The conductor runs the checks that cover it, records the change in the decision log, and lists the file in its final report.
+- A hook checks the path. It does not check what kind of file it is or what is written to it. Which files may go on the line is an instruction.
+
 ## Working in one directory
 
 Subagents work in your working directory, several at a time, with no worktree between them. Results need no merging, and every task sees the current code. The conductor keeps the tasks out of each other's way with five rules:
@@ -126,7 +139,7 @@ These rules are instructions. No hook enforces them.
 | Kind | Name | Role |
 |---|---|---|
 | Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
-| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, and whether the work may use a worktree when it needs one. Fable loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
+| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, which files the conductor may write itself, and whether the work may use a worktree when it needs one. Fable loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
@@ -147,13 +160,13 @@ The enforcement below applies in a conductor session.
 | 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |
 | 6. Subagents do not start subagents | Subagents have no `Agent` tool. A call is refused | `agents/*.md`, `scripts/guard_agent.py` |
 | 7. Review the result independently, then read the report | A `DONE` handback requires passing verification records. Reports arrive only as files. A report does not open without a review record | `scripts/check_report.py`, `scripts/report_gate.py` |
-| 8. The conductor waits for delegated work instead of doing it | Instructions. The conductor's Edit, Write, and file-changing shell commands are refused. The shell check catches the common ways to change a file and sends the work back to delegation. It is not a sandbox | `skills/conductor/SKILL.md`, `scripts/guard_main.py` |
+| 8. The conductor waits for delegated work instead of doing it | Instructions. The conductor's Edit, Write, and file-changing shell commands are refused, except for the files that the brief lists on its `Conductor writes:` line once you have confirmed it. The shell check catches the common ways to change a file and sends the work back to delegation. It is not a sandbox | `skills/conductor/SKILL.md`, `scripts/guard_main.py` |
 | 9. Every delegation goes through a task spec | Delegation is refused without a task spec file that has the required sections | `scripts/guard_agent.py` |
 | 10. Failed work goes back to the subagent | Instructions. A reworked report needs a new review record before it opens | `scripts/report_gate.py` |
 | 11. Documents and comments hold only what the code cannot show. Documents are brought up to date each time a group of related tasks is done, not by the subagents that implement | Instructions (`skills/documentation/SKILL.md`), which must be loaded before an implementation delegation. Whether a group is closed is not checked by a hook | `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `scripts/guard_agent.py` |
 | 12. Subagents share one working directory without damaging each other's work, and no worktree is used without your approval | Instructions: each task owns its files, one writer per file, dependent tasks run in order, only the conductor changes git state, and whole-tree checks run only when no subagent is editing. No hook checks these | `skills/conductor/SKILL.md`, `skills/interview/SKILL.md`, `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `agents/sonnet-writer.md` |
 
-Principle 8 is about patience, not about a waiting mode. Subagents usually run in the background, and the conductor ends its turn and resumes when one of them reports. However long that takes, the conductor does not take the work back. The hooks leave it unable to change project files, so the plugin needs no extra setting for this.
+Principle 8 is about patience, not about a waiting mode. Subagents usually run in the background, and the conductor ends its turn and resumes when one of them reports. However long that takes, the conductor does not take the work back. The hooks leave it unable to change project files other than those you approved in the brief, so the plugin needs no extra setting for this.
 
 ## Documents and comments
 
@@ -163,7 +176,7 @@ Every document in a project costs context in each later session that reads it, a
 - **Other text has to pass one test.** Without this text, would a capable reader who has only the code make a wrong decision? If not, it is not written. A fact passes only when it came from outside the code: you said it, something was measured, or an outside system behaved that way.
 - **Each fact has one place.** A reason that belongs to one place in the code is a short comment there. A fact with no one place, such as what the product is for, a constraint from outside the code, or a plan, goes in a document. What changed and why is left to git.
 - **A document says what is true now.** A statement that the work makes false is rewritten, not added to. A plan or a spec that the work has implemented is deleted.
-- **Documents are updated once per task group.** The conductor splits the work into groups of related tasks. When every task of a group has passed review, it works out what the group made false or unnecessary and delegates those changes as one task. The subagents that implement do not edit documents.
+- **Documents are updated once per task group.** The conductor splits the work into groups of related tasks. When every task of a group has passed review, it works out what the group made false or unnecessary and delegates those changes as one task, or writes them itself when you approved those files in the brief. The subagents that implement do not edit documents.
 - **Only what the work caused.** A document that was already out of date, a new document, and the removal of a whole file are extras. The conductor proposes them and does not make them on its own.
 
 The test is not applied to documents for people who do not read the code, such as a user guide, or to a history the project keeps on purpose, such as a changelog. The full rules are in `skills/documentation/SKILL.md`.

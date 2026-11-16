@@ -1,7 +1,7 @@
 {
   "name": "orchestra",
   "displayName": "Orchestra",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A harness that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement.",
   "author": {
     "name": "paulkwongemini",

@@ -469,6 +469,63 @@ def preapproved_keys(text):
     return keys
 
 
+_CONDUCTOR_WRITES = re.compile(
+    # After the colon, `_` counts as markup only when whitespace follows it, so the underscore
+    # that begins an entry such as `_config.yml` stays part of the entry.
+    r"^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_`]*conductor[ \t]+writes[*_`]*[ \t]*[:：]"
+    r"(?:[*_`]*(?=[ \t]|$)|[*`]*)(.*)$",
+    re.I | re.M,
+)
+_GLOB = re.compile(r"[*?\[]")
+
+
+def conductor_write_entries(text):
+    """The entries on the `Conductor writes:` lines under `## Decision rights`, as written."""
+    body = section_body(text, PREAPPROVAL_SECTION)
+    entries = []
+    for m in _CONDUCTOR_WRITES.finditer(body or ""):
+        # Only commas separate entries, because a path may contain a space.
+        for entry in re.split(r"[,，、]", m.group(1)):
+            # Never `_`: it can begin or end a file name, as in `_config.yml` or `__init__.py`.
+            entry = entry.strip(" \t\r`'\"*")
+            if entry and entry.lower() != "none":
+                entries.append(entry)
+    return entries
+
+
+def conductor_write_file(entry, data):
+    """The real path of the one project file an entry names, or None when it names no such file.
+
+    An entry with a glob character, a directory, a path outside the project, and a path inside
+    `.orchestra/` name nothing.
+    """
+    if _GLOB.search(entry) or entry.endswith(("/", os.sep)):
+        return None
+    root = project_dir(data)
+    try:
+        p = os.path.expanduser(entry)
+        if not os.path.isabs(p):
+            p = os.path.join(root, p)
+        p = os.path.realpath(p)
+        if os.path.isdir(p):
+            return None
+    except (OSError, ValueError):
+        return None
+    if p == root or not inside(p, root) or inside(p, work_dir(data)):
+        return None
+    return p
+
+
+def conductor_write_files(text, data):
+    """The real paths of the project files the `Conductor writes:` lines of a brief name."""
+    files = set()
+    for entry in conductor_write_entries(text):
+        p = conductor_write_file(entry, data)
+        if p:
+            files.add(p)
+    return files
+
+
 _STATUS_LINE = re.compile(r"^\W*STATUS\W*[:：]\s*\W*([A-Za-z]+)", re.I)
 
 
