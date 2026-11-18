@@ -1,6 +1,6 @@
 # orchestra
 
-A Claude Code plugin that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement. As the work goes on, Fable keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
+A Claude Code plugin that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents take the work that needs no judgment. As the work goes on, Fable keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
 
 Orchestra chooses the model and effort for its Opus and Sonnet subagents. You set the Fable conductor's effort yourself using the control below the prompt input. Orchestra does not change the conductor's effort.
 
@@ -9,7 +9,7 @@ Orchestra chooses the model and effort for its Opus and Sonnet subagents. You se
 Orchestra sets the model and the effort level for each piece of work by Anthropic's official prompting guides for [Fable 5.2](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2), [Opus 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5), and [Sonnet 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5). It has two goals:
 
 - **Cut needless token use.** No task runs on a larger model or a higher effort level than it needs.
-- **Let each model do what it does best.** Fable understands what you want, designs, and reviews. Opus and Sonnet implement.
+- **Let each model do what it does best.** Fable understands what you want, designs, and reviews. Opus and Sonnet implement. Haiku finds, reads, and makes mechanical edits.
 
 ## Workflow
 
@@ -99,7 +99,7 @@ When a command's kind is not pre-approved:
 - Run by the conductor, for `data`, `deps` and `git`: it is refused. The conductor adds the key to the brief, tells you what it wants to run and why, and asks you. Meanwhile it keeps working on what does not depend on your answer.
 - Run by the conductor, for `push`, `github`, `http`, `ssh` and `deploy`: a confirmation prompt opens, and the conductor's turn waits until you answer it.
 - Run by a subagent that implements: it is refused, the subagent reports `BLOCKED`, and the conductor asks you.
-- A read-only subagent never runs these commands, pre-approved or not.
+- A read-only subagent never runs these commands, pre-approved or not. Neither does a Haiku subagent.
 
 The check reads the command line and is a tripwire for the common commands, not a sandbox. It does not look inside a container: a command run through `docker exec` is checked only for data and schema changes.
 
@@ -115,6 +115,24 @@ The conductor delegates every change to your project, with one exception that yo
 - The line counts once you have replied after the brief last changed, and it holds for that piece of work only.
 - A file the conductor writes has no second writer and no independent review. The conductor runs the checks that cover it, records the change in the decision log, and lists the file in its final report.
 - A hook checks the path. It does not check what kind of file it is or what is written to it. Which files may go on the line is an instruction.
+
+## Haiku for work that needs no judgment
+
+Part of the work needs no judgment: finding where something is, or making the same edit in twenty places. Two subagents do it on Haiku, at a small fraction of the cost of the other models. The aim is the same result for fewer tokens.
+
+| Subagent | What it does | Who may start it |
+|---|---|---|
+| `orchestra:haiku-scout` | Finds and reads. Changes nothing | The conductor, and every Opus or Sonnet subagent |
+| `orchestra:haiku-editor` | Makes a mechanical edit and runs the check it is given | The conductor, once you have confirmed the brief, and the subagents that implement |
+
+- Haiku gets only work that the caller can check against the files in less effort than doing it: a scout's answer by opening the lines it cites, an edit by reading the diff and running the check. A judgment, a check that decides whether work is accepted, and a question where the answer "none" matters never go to Haiku.
+- The caller checks what comes back, and does the work itself when the check fails. Work that Haiku did inside a task belongs to the subagent that has the task, and the conductor reviews that task as before.
+- A call is a prompt in a fixed form, `FIND:` for the scout and `DO:`, `FILES:`, `CHECK:` for the editor, of at most 1,500 characters. It has no task spec. A hook refuses any other form.
+- A Haiku subagent starts no subagent. `haiku-scout` cannot change a file. `haiku-editor` cannot write inside `.orchestra/`, and cannot run a command of a pre-approval kind, whatever the brief pre-approves.
+- `haiku-editor` returns only a status, the changed files, and the exit code of the check, so the caller learns the result from the diff.
+- Nothing changes for you. There is no new question in the interview and no new line in the brief.
+
+No hook checks whether a request really needs no judgment, whether the editor stayed inside the files it was given, or whether the caller ran the check again. Those are instructions.
 
 ## Working in one directory
 
@@ -146,6 +164,8 @@ These rules are instructions. No hook enforces them.
 | Subagent | `orchestra:opus-analyst` | Opus, effort high. Architecture review, deep analysis. Read-only |
 | Subagent | `orchestra:sonnet-builder` | Sonnet, effort medium. Simple code, repetitive work |
 | Subagent | `orchestra:sonnet-writer` | Sonnet, effort medium. Documents whose structure is already decided, including the document changes at the close of a task group |
+| Subagent | `orchestra:haiku-scout` | Haiku, effort medium. Finds and reads. Read-only |
+| Subagent | `orchestra:haiku-editor` | Haiku, effort medium. Mechanical edits that the request determines completely |
 
 ## Principles and how each is enforced
 
@@ -156,12 +176,12 @@ The enforcement below applies in a conductor session.
 | 1. Fable is the orchestrator | Instructions | `skills/conductor/SKILL.md` |
 | 2. Understand the intent before working | Instructions (`skills/conductor/SKILL.md`, `skills/interview/SKILL.md`): each message is judged anew as a direct answer or as work, the interview comes before any action that needs your approval, one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
 | 3. Stop and ask when an exception comes up | Instructions. A command that changes data, dependencies, repository state, or something outside this machine runs without a question only when the brief pre-approves its kind. Otherwise it is refused or goes to you. See "Pre-approved actions" | `skills/interview/SKILL.md`, `scripts/guard_main.py` |
-| 4. Subagents use Opus or Sonnet, with model and effort chosen by the delegation rules | Agent types off the roster and `haiku` are refused. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a delegation | `scripts/guard_agent.py` |
+| 4. Tasks run on Opus or Sonnet, with model and effort chosen by the delegation rules. Haiku runs only work that needs no judgment | Agent types off the roster are refused. So is a model that does not belong to the subagent: `haiku` for an Opus or Sonnet subagent, any other model for a Haiku subagent. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a task is delegated. When Haiku may be used is an instruction. See "Haiku for work that needs no judgment" | `scripts/guard_agent.py` |
 | 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |
-| 6. Subagents do not start subagents | Subagents have no `Agent` tool. A call is refused | `agents/*.md`, `scripts/guard_agent.py` |
-| 7. Review the result independently, then read the report | A `DONE` handback requires passing verification records. Reports arrive only as files. A report does not open without a review record | `scripts/check_report.py`, `scripts/report_gate.py` |
+| 6. Subagents do not start subagents, except a Haiku subagent | An `Agent` call inside a subagent is refused unless it starts `haiku-scout` or `haiku-editor` with a prompt in the fixed form. A read-only subagent may start only `haiku-scout`. A Haiku subagent has no `Agent` tool, and a call from one is refused | `agents/*.md`, `scripts/guard_agent.py` |
+| 7. Review the result independently, then read the report | A `DONE` handback requires passing verification records. Reports arrive only as files. A report does not open without a review record. A `haiku-editor` returns no account of its work: only a status, the changed files, and the exit code of the check | `scripts/check_report.py`, `scripts/report_gate.py` |
 | 8. The conductor waits for delegated work instead of doing it | Instructions. The conductor's Edit, Write, and file-changing shell commands are refused, except for the files that the brief lists on its `Conductor writes:` line once you have confirmed it. The shell check catches the common ways to change a file and sends the work back to delegation. It is not a sandbox | `skills/conductor/SKILL.md`, `scripts/guard_main.py` |
-| 9. Every delegation goes through a task spec | Delegation is refused without a task spec file that has the required sections | `scripts/guard_agent.py` |
+| 9. Every task goes through a task spec | The delegation of a task is refused without a task spec file that has the required sections. A Haiku call is not a task: it takes a prompt in a fixed form, and is refused in any other form | `scripts/guard_agent.py` |
 | 10. Failed work goes back to the subagent | Instructions. A reworked report needs a new review record before it opens | `scripts/report_gate.py` |
 | 11. Documents and comments hold only what the code cannot show. Documents are brought up to date each time a group of related tasks is done, not by the subagents that implement | Instructions (`skills/documentation/SKILL.md`), which must be loaded before an implementation delegation. Whether a group is closed is not checked by a hook | `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `scripts/guard_agent.py` |
 | 12. Subagents share one working directory without damaging each other's work, and no worktree is used without your approval | Instructions: each task owns its files, one writer per file, dependent tasks run in order, only the conductor changes git state, and whole-tree checks run only when no subagent is editing. No hook checks these | `skills/conductor/SKILL.md`, `skills/interview/SKILL.md`, `agents/opus-engineer.md`, `agents/sonnet-builder.md`, `agents/sonnet-writer.md` |

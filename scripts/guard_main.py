@@ -8,10 +8,12 @@ Principle 8  The conductor does not implement.
     the user has spoken since the brief last changed. An entry names one file: a glob, a
     directory, a path outside the project or inside `.orchestra/` names nothing. From the shell
     it changes no other file, and it never edits a file in place.
-  - Read-only subagents: write only their own report and working files under
-    `.orchestra/<work>/files/`.
+  - Read-only subagents, `haiku-scout` included: write only their own report and working
+    files under `.orchestra/<work>/files/`.
   - Implementation subagents: inside `.orchestra/`, write only their own report and working
     files under `.orchestra/<work>/files/`.
+  - `haiku-editor` (role `editor`): writes anywhere an implementation subagent may, except
+    that it writes nothing inside `.orchestra/`, from the shell either.
   - The main conversation of a session on any other model is left alone.
 Principle 3  Commands that change data, dependencies, repository state, or external
              services run only when the user agreed to their kind of action in advance: the
@@ -25,8 +27,11 @@ Principle 3  Commands that change data, dependencies, repository state, or exter
     that names a production environment always goes to the user.
   - Implementation subagents: a command of these kinds that is not pre-approved is refused,
     and the subagent reports BLOCKED. Data commands that name production are always refused.
-  - Read-only subagents: commands of these kinds are always refused.
+  - Read-only subagents and `haiku-editor`: commands of these kinds are always refused, whatever
+    the brief pre-approves. `haiku-editor` is told to report FAILED.
   A command the harness cannot read is refused for the conductor and read-only subagents.
+  A fault in the guard goes to the user for confirmation, except for implementation subagents
+  and `haiku-editor`.
 Principles 5 and 6  No role starts a new session with the claude CLI.
 
 The shell check is a tripwire for the common paths. It is not a sandbox.
@@ -51,7 +56,14 @@ WHY = {
         "This subagent is read-only. Do not change files. Put any change you think is needed "
         "in your report as a recommendation."
     ),
+    "editor": (
+        "This subagent writes nothing inside `.orchestra/`. The brief, task specs, reports and "
+        "review records there belong to others."
+    ),
 }
+# Roles whose shell commands get only the category rules, apart from the `editor` role's
+# writes into `.orchestra/`.
+IMPL_LIKE = ("impl", "editor")
 ASK_GIT = "This git command changes repository state, so the user has to confirm it (Principle 3)."
 ASK_OUT = "This command reaches outside this machine or is hard to undo, so the user has to confirm it (Principle 3)."
 ASK_DATA = "This command looks like it changes data or a schema, so the user has to confirm it (Principle 3)."
@@ -261,6 +273,10 @@ def impl_may_write(path, data):
     return True
 
 
+def editor_may_write(path, data):
+    return not c.inside(path, c.work_dir(data))
+
+
 class Approval:
     """What the brief in the session's active work folder pre-approves, and which project files
     it lets the conductor write.
@@ -309,9 +325,10 @@ def brief_approval(data):
 
 
 class Ctx:
-    def __init__(self, data, role):
+    def __init__(self, data, role, command=""):
         self.data = data
         self.role = role
+        self.command = command
         self._approval = None
 
     @property
@@ -324,6 +341,11 @@ class Ctx:
         """The verdict on a command of one pre-approval category, for this role."""
         kind = "This command %s, which the pre-approval key `%s` covers" % (KINDS[key], key)
         text_only = " " + DATA_TEXT_ONLY if key == "data" else ""
+        if self.role == "editor":
+            return ("deny", "This subagent makes mechanical edits only, and does not run a command that "
+                            "%s, whatever the brief pre-approves. The refused command: `%s`. Do not look "
+                            "for another way to run it. Stop and report `STATUS: FAILED`."
+                            % (KINDS[key], self.command.strip()))
         if self.role == "readonly":
             return ("deny", "This subagent is read-only, and a read-only subagent does not run a command "
                             "that %s. Put the command in your report as a recommendation.%s"
@@ -381,6 +403,8 @@ class Ctx:
             return conductor_may_write(path, self.data, self.approval)
         if self.role == "readonly":
             return readonly_may_write(path, self.data)
+        if self.role == "editor":
+            return editor_may_write(path, self.data)
         return impl_may_write(path, self.data)
 
     @property
@@ -1035,10 +1059,48 @@ def file_rule(name, args, via_xargs, ctx, heredocs):
     return None
 
 
+def editor_file_rule(name, args, ctx):
+    """The `editor` role: a command that writes files is refused when it names a path inside `.orchestra/`."""
+    plain = [a for a in args if not a.startswith("-")]
+    targets = []
+    if name in MUTATE_LAST:
+        targets = plain[-1:]
+    elif name in MUTATE_ALL or name == "tee" or name in EDITORS:
+        targets = plain
+    elif name in ("sed", "gsed"):
+        if any(a == "--in-place" or a.startswith("--in-place=")
+               or (not a.startswith("--") and re.match(r"^-[A-Za-z]*i", a)) for a in args):
+            targets = plain
+    elif name == "perl":
+        if any(not a.startswith(("--", "-M", "-I")) and re.match(r"^-[A-Za-z0-9]*i", a) for a in args):
+            targets = plain
+    elif name in ("awk", "gawk", "mawk"):
+        if ("-i" in args and "inplace" in args) or "-iinplace" in args:
+            targets = plain
+    elif name == "dd":
+        targets = [a[3:] for a in args if a.startswith("of=")]
+    elif name == "find":
+        targets = [args[k + 1] for k, a in enumerate(args[:-1])
+                   if a in ("-fprint", "-fprint0", "-fprintf", "-fls")]
+        if "-delete" in args:
+            targets += [a for a in args if not a.startswith(("-", "(", ")", "!"))]
+    elif name == "curl":
+        targets = [t for t in CurlCall(args).outputs if t]
+    elif name == "wget":
+        targets = [args[k + 1] for k, a in enumerate(args[:-1]) if re.fullmatch(r"-[A-Za-z]*O|--output-document", a)]
+        targets += [a.split("=", 1)[1] for a in args if a.startswith("--output-document=")]
+    for target in targets:
+        if target and "__SUB__" not in target and c.inside(c.resolve(target, ctx.data), c.work_dir(ctx.data)):
+            return ("deny", "`%s` changes files inside `.orchestra/` here. %s" % (name, ctx.why))
+    return None
+
+
 def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
     """Per-command rules. An implementation subagent gets only the category rules."""
     results = [category_rule(name, args, ctx, heredocs, depth)]
-    if ctx.role != "impl":
+    if ctx.role == "editor":
+        results.append(editor_file_rule(name, args, ctx))
+    elif ctx.role != "impl":
         results.append(file_rule(name, args, via_xargs, ctx, heredocs))
     return worst(results)
 
@@ -1227,7 +1289,7 @@ def judge_segment(seg, ctx, heredocs, depth):
 def judge_command(cmd, ctx, depth=0):
     """Judge a whole command. Returns None (pass) or ("deny" | "ask", reason)."""
     if depth > 5:
-        return None if ctx.role == "impl" else ("deny", DENY_PARSE)
+        return None if ctx.role in IMPL_LIKE else ("deny", DENY_PARSE)
     results = []
     if data_hit(cmd, depth)[0]:
         # Nothing lets a data command through because its text looks like it targets a test or
@@ -1243,7 +1305,7 @@ def judge_command(cmd, ctx, depth=0):
         try:
             _line, subs, tokens, _comment = read_line(line)
         except ValueError:
-            if ctx.role != "impl":
+            if ctx.role not in IMPL_LIKE:
                 results.append(("deny", DENY_PARSE))
             continue
         for inner in subs:
@@ -1264,7 +1326,7 @@ def handle_bash(cmd, data, role):
             "Do not handle the reports folder from the shell (Principle 7). Write the review "
             "record first, then open the report with the Read tool."
         )
-    result = judge_command(cmd, Ctx(data, role))
+    result = judge_command(cmd, Ctx(data, role, cmd))
     if result is None:
         c.allow()
     kind, reason = result
@@ -1326,6 +1388,10 @@ def handle_write(path_text, data, role):
             "`.orchestra/<work>/reports/` and the working files of your task under "
             "`.orchestra/<work>/files/`." % (path_text, WHY["readonly"])
         )
+    if role == "editor":
+        if editor_may_write(path, data):
+            c.allow()
+        c.deny("You cannot edit `%s`. %s" % (path_text, WHY["editor"]))
     if impl_may_write(path, data):
         c.allow()
     c.deny(
@@ -1345,7 +1411,10 @@ def main():
         name = c.bare(data.get("agent_type"))
         if name not in c.ROSTER:
             c.allow()
-        role = "readonly" if c.ROSTER[name]["kind"] == "readonly" else "impl"
+        if name == "haiku-editor":
+            role = "editor"
+        else:
+            role = "readonly" if c.ROSTER[name]["kind"] == "readonly" else "impl"
     elif c.main_is_conductor(data):
         role = "conductor"
     else:
@@ -1362,7 +1431,7 @@ def main():
     except SystemExit:
         raise
     except Exception as exc:  # a fault in the guard does not block the work, but a person confirms it
-        if role != "impl":
+        if role not in IMPL_LIKE:
             c.ask(
                 "The guard script failed (%s) and could not check this call. The user has to "
                 "confirm it." % type(exc).__name__

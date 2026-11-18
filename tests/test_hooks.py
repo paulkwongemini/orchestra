@@ -1966,6 +1966,356 @@ class CheckReportTest(HookTest):
         self.assertEqual(self.stop(""), "block")
 
 
+SCOUT_PROMPT = "FIND: where the session expiry is handled\nIN: src/"
+EDITOR_PROMPT = "DO: rename expire_session to end_session\nFILES: src/login.py, src/session.py\nCHECK: pytest tests/test_login.py"
+EDITOR_DONE = "STATUS: DONE\nFILES: src/login.py, src/session.py\nCHECK: exit 0"
+
+
+class HaikuAgentTest(HookTest):
+    """The Haiku subagents: who may start them, and with what prompt and model."""
+
+    IMPL = ("opus-engineer", "sonnet-builder", "sonnet-writer")
+
+    def agent(self, payload):
+        return self.verdict("guard_agent.py", payload)
+
+    def call(self, name, prompt, **extra):
+        return self.agent(self.main("Agent", dict({"subagent_type": "orchestra:" + name, "prompt": prompt}, **extra)))
+
+    def inside(self, caller, name, prompt, **extra):
+        stype = name if ":" in name or name in ("general-purpose", "Explore", "fork") else "orchestra:" + name
+        return self.agent(self.sub(caller, "Agent", dict({"subagent_type": stype, "prompt": prompt}, **extra)))
+
+    def reason(self, payload):
+        out = self.run_hook("guard_agent.py", payload)
+        return out["hookSpecificOutput"]["permissionDecisionReason"] if out else ""
+
+    def spoke(self, at):
+        self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": "ok"})
+        turn = os.path.join(self.state, "sessions", "session-1.turn")
+        os.utime(turn, (at, at))
+
+    def activate(self, unit=UNIT):
+        self.assertEqual(self.verdict("report_gate.py", self.main("Read", {"file_path": unit + "/brief.md"})), "allow")
+
+    def work_record(self):
+        path = os.path.join(self.state, "sessions", "session-1.work")
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def no_skills(self):
+        os.remove(self.rules)
+        os.remove(self.doc_rules)
+
+    # ---- the conductor
+
+    def test_conductor_to_scout(self):
+        self.no_skills()
+        self.assertEqual(self.call("haiku-scout", SCOUT_PROMPT), "allow")
+        self.assertEqual(self.call("haiku-scout", "  FIND: the login handler"), "allow")
+        self.assertIsNone(self.work_record())
+        self.assertEqual(self.call("haiku-scout", "Find where the session expiry is handled."), "deny")
+        self.assertEqual(self.call("haiku-scout", "find: the login handler"), "deny")  # keys are uppercase
+        self.assertEqual(self.call("haiku-scout", "FIND:   \nwhere the session expiry is handled"), "deny")
+        self.assertEqual(self.call("haiku-scout", "FIND: x\n" + "y" * 1500), "deny")
+        self.assertEqual(self.call("haiku-scout", "FIND: x\n" + "y" * (1500 - 8)), "allow")
+
+    def test_scout_refusals_name_the_problem_and_the_format(self):
+        payload = self.main("Agent", {"subagent_type": "orchestra:haiku-scout", "prompt": "Find it."})
+        why = self.reason(payload)
+        self.assertIn("FIND:", why)
+        self.assertIn("Missing", why)
+        payload["tool_input"]["prompt"] = "FIND:\n"
+        self.assertIn("nothing after the key", self.reason(payload))
+        payload["tool_input"]["prompt"] = "FIND: x\n" + "y" * 2000
+        why = self.reason(payload)
+        self.assertIn("not a mechanical one", why)
+        self.assertIn("delegate it as a task", why)
+
+    def test_conductor_to_editor(self):
+        self.no_skills()
+        self.write(UNIT + "/brief.md", BRIEF, mtime=2000)
+        self.spoke(3000)
+        self.activate()
+        before = self.work_record()
+        self.assertEqual(self.call("haiku-editor", EDITOR_PROMPT), "allow")
+        self.assertEqual(self.work_record(), before)
+        for key in ("DO", "FILES", "CHECK"):
+            lines = EDITOR_PROMPT.splitlines()
+            dropped = "\n".join(l for l in lines if not l.startswith(key + ":"))
+            self.assertEqual(self.call("haiku-editor", dropped), "deny", key)
+            emptied = "\n".join(key + ":" if l.startswith(key + ":") else l for l in lines)
+            self.assertEqual(self.call("haiku-editor", emptied), "deny", key)
+        self.assertEqual(self.call("haiku-editor", EDITOR_PROMPT + "\n" + "y" * 1500), "deny")
+
+    def test_editor_needs_a_confirmed_brief(self):
+        payload = self.main("Agent", {"subagent_type": "orchestra:haiku-editor", "prompt": EDITOR_PROMPT})
+        self.assertEqual(self.agent(payload), "deny")
+        self.assertIn("no active work folder", self.reason(payload))
+        self.write(UNIT + "/brief.md", BRIEF, mtime=2000)
+        self.activate()
+        self.assertEqual(self.agent(payload), "deny")
+        self.assertIn("No user turn is recorded", self.reason(payload))
+        self.spoke(1000)
+        self.assertEqual(self.agent(payload), "deny")
+        self.assertIn("after the user last spoke", self.reason(payload))
+        self.spoke(3000)
+        self.assertEqual(self.agent(payload), "allow")
+        os.remove(os.path.join(self.proj, UNIT, "brief.md"))
+        self.assertEqual(self.agent(payload), "deny")
+        self.assertIn("has no brief", self.reason(payload))
+
+    def test_editor_brief_of_another_folder_does_not_count(self):
+        self.write(UNIT + "/brief.md", BRIEF, mtime=2000)
+        self.write(OTHER_UNIT + "/tasks/T01-login-fix.md", TASK)
+        self.spoke(3000)
+        self.assertEqual(self.verdict("guard_main.py", self.main("Write", {"file_path": OTHER_UNIT + "/decisions.md"})), "allow")
+        self.activate()
+        self.assertEqual(self.call("haiku-editor", EDITOR_PROMPT), "allow")
+        prompt = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % OTHER_UNIT
+        self.assertEqual(self.call("opus-analyst", prompt), "allow")  # makes the other folder active
+        self.assertEqual(self.call("haiku-editor", EDITOR_PROMPT), "deny")
+
+    def test_existing_rules_for_the_conductor_stay(self):
+        self.no_skills()
+        prompt = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % UNIT
+        self.write(UNIT + "/brief.md", BRIEF)
+        self.write(UNIT + "/tasks/T01-login-fix.md", TASK)
+        self.assertEqual(self.call("sonnet-builder", prompt), "deny")  # the skills are not loaded
+        self.assertEqual(self.call("haiku-scout", prompt), "deny")  # a task spec is no Haiku request
+
+    # ---- inside subagents
+
+    def test_implementation_subagents_may_start_haiku(self):
+        for caller in self.IMPL:
+            with self.subTest(caller=caller):
+                self.assertEqual(self.inside(caller, "haiku-scout", SCOUT_PROMPT), "allow")
+                self.assertEqual(self.inside(caller, "haiku-editor", EDITOR_PROMPT), "allow")
+                self.assertEqual(self.inside(caller, "haiku-scout", "Find the handler."), "deny")
+                self.assertEqual(self.inside(caller, "haiku-editor", "DO: rename it\nFILES: src/a.py"), "deny")
+                self.assertEqual(self.inside(caller, "haiku-editor", EDITOR_PROMPT + "\n" + "y" * 1500), "deny")
+                for other in ("sonnet-builder", "opus-analyst", "opus-engineer", "general-purpose",
+                              "Explore", "fork", "other:haiku-scout"):
+                    self.assertEqual(self.inside(caller, other, SCOUT_PROMPT), "deny", other)
+                self.assertEqual(self.agent(self.sub(caller, "Agent", {"prompt": SCOUT_PROMPT})), "deny")
+                self.assertEqual(self.agent(self.sub(caller, "Workflow", {"name": "audit"})), "deny")
+
+    def test_subagent_length_refusal_says_do_it_yourself(self):
+        payload = self.sub("sonnet-builder", "Agent", {"subagent_type": "orchestra:haiku-scout",
+                                                       "prompt": "FIND: x\n" + "y" * 2000})
+        self.assertIn("do the work yourself", self.reason(payload))
+
+    def test_analyst_may_start_only_the_scout(self):
+        self.assertEqual(self.inside("opus-analyst", "haiku-scout", SCOUT_PROMPT), "allow")
+        self.assertEqual(self.inside("opus-analyst", "haiku-editor", EDITOR_PROMPT), "deny")
+        self.assertEqual(self.inside("opus-analyst", "haiku-scout", "FIND:"), "deny")
+        self.assertEqual(self.inside("opus-analyst", "sonnet-builder", SCOUT_PROMPT), "deny")
+
+    def test_haiku_subagents_start_nothing(self):
+        for caller in ("haiku-scout", "haiku-editor"):
+            with self.subTest(caller=caller):
+                self.assertEqual(self.inside(caller, "haiku-scout", SCOUT_PROMPT), "deny")
+                self.assertEqual(self.inside(caller, "haiku-editor", EDITOR_PROMPT), "deny")
+                self.assertEqual(self.inside(caller, "sonnet-builder", SCOUT_PROMPT), "deny")
+                self.assertEqual(self.agent(self.sub(caller, "Workflow", {"name": "audit"})), "deny")
+
+    def test_subagents_off_the_roster_are_left_alone(self):
+        payload = self.sub("general-purpose", "Agent", {"subagent_type": "orchestra:haiku-editor", "prompt": "x"})
+        self.assertEqual(self.agent(payload), "allow")
+
+    # ---- the model argument
+
+    def test_model_argument(self):
+        self.write(UNIT + "/brief.md", BRIEF, mtime=2000)
+        self.spoke(3000)
+        self.activate()
+        for name, prompt in (("haiku-scout", SCOUT_PROMPT), ("haiku-editor", EDITOR_PROMPT)):
+            for model in ("sonnet", "opus", "fable", "inherit"):
+                self.assertEqual(self.call(name, prompt, model=model), "deny", (name, model))
+                self.assertEqual(self.inside("opus-engineer", name, prompt, model=model), "deny", (name, model))
+            for extra in ({"model": "haiku"}, {}):
+                self.assertEqual(self.call(name, prompt, **extra), "allow", (name, extra))
+                self.assertEqual(self.inside("opus-engineer", name, prompt, **extra), "allow", (name, extra))
+        prompt = "Read the task spec at `%s/tasks/T01-login-fix.md` and carry it out." % UNIT
+        self.write(UNIT + "/tasks/T01-login-fix.md", TASK)
+        self.assertEqual(self.call("sonnet-builder", prompt), "allow")
+        self.assertEqual(self.call("sonnet-builder", prompt, model="haiku"), "deny")
+        self.assertEqual(self.call("opus-analyst", prompt, model="haiku"), "deny")
+
+
+class HaikuGuardTest(HookTest):
+    """What the Haiku subagents may write and run."""
+
+    def run_as(self, role, tool, tool_input):
+        return self.verdict("guard_main.py", self.sub(role, tool, tool_input))
+
+    def sh(self, role, cmd):
+        return self.run_as(role, "Bash", {"command": cmd})
+
+    def reason(self, role, cmd):
+        out = self.run_hook("guard_main.py", self.sub(role, "Bash", {"command": cmd}))
+        return out["hookSpecificOutput"]["permissionDecisionReason"] if out else ""
+
+    def confirmed(self, line):
+        self.write(UNIT + "/brief.md", BRIEF + "\n" + line + "\n", mtime=2000)
+        self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": "ok"})
+        os.utime(os.path.join(self.state, "sessions", "session-1.turn"), (3000, 3000))
+        self.assertEqual(self.verdict("report_gate.py", self.main("Read", {"file_path": UNIT + "/brief.md"})), "allow")
+
+    def test_scout_is_read_only(self):
+        self.assertEqual(self.run_as("haiku-scout", "Edit", {"file_path": "src/app.py"}), "deny")
+        self.assertEqual(self.run_as("haiku-scout", "Write", {"file_path": "src/app.py"}), "deny")
+        self.assertEqual(self.sh("haiku-scout", "echo x > src/x.txt"), "deny")
+        self.assertEqual(self.sh("haiku-scout", "rg -n TODO src"), "allow")
+        self.confirmed("Pre-approved: git")
+        self.assertEqual(self.sh("opus-engineer", 'git commit -m "x"'), "allow")  # the key is in force
+        self.assertEqual(self.sh("haiku-scout", 'git commit -m "x"'), "deny")
+
+    def test_editor_writes(self):
+        for tool in ("Edit", "Write"):
+            self.assertEqual(self.run_as("haiku-editor", tool, {"file_path": "src/app.py"}), "allow", tool)
+            readme = os.path.join(self.proj, "README.md")
+            self.assertEqual(self.run_as("haiku-editor", tool, {"file_path": readme}), "allow", tool)
+            for path in (UNIT + "/reports/T01.md", UNIT + "/files/T01/run.rb", UNIT + "/brief.md",
+                         UNIT + "/tasks/T01-login-fix.md", ".orchestra/notes.md"):
+                self.assertEqual(self.run_as("haiku-editor", tool, {"file_path": path}), "deny", (tool, path))
+        self.assertEqual(self.run_as("haiku-editor", "NotebookEdit", {"notebook_path": "analysis.ipynb"}), "allow")
+        self.assertEqual(self.run_as("haiku-editor", "NotebookEdit", {"notebook_path": UNIT + "/files/a.ipynb"}), "deny")
+
+    def test_editor_shell_writes(self):
+        for path in (UNIT + "/reports/T01.md", UNIT + "/files/T01/out.txt", UNIT + "/brief.md"):
+            for cmd in ("echo x > " + path, "echo x >> " + path, "echo x | tee " + path,
+                        "cp src/a.py " + path, "rm " + path, "sed -i s/a/b/ " + path):
+                self.assertEqual(self.sh("haiku-editor", cmd), "deny", cmd)
+        for cmd in ("echo x > src/x.txt", "sed -i 's/a/b/' src/app.py", "cp %s/brief.md /tmp/orchestra-b.md" % UNIT,
+                    "cat %s/brief.md" % UNIT, "python3 tests/x.py", "pytest -q > /tmp/orchestra-out.txt 2>&1"):
+            self.assertEqual(self.sh("haiku-editor", cmd), "allow", cmd)
+
+    def test_editor_runs_no_category_command(self):
+        for key in ("git", "deps", "data", "push", "ssh"):
+            with self.subTest(key=key):
+                cmd = KEY_COMMANDS[key]
+                self.assertEqual(self.sh("haiku-editor", cmd), "deny", cmd)
+                self.confirmed("Pre-approved: " + key)
+                self.assertEqual(self.sh("opus-engineer", cmd), "allow", cmd)  # the key is in force
+                self.assertEqual(self.sh("haiku-editor", cmd), "deny", cmd)
+                why = self.reason("haiku-editor", cmd)
+                self.assertIn("FAILED", why)
+                self.assertIn(cmd, why)
+        self.assertEqual(self.sh("haiku-editor", "RAILS_ENV=" + "production " + KEY_COMMANDS["data"]), "deny")
+        self.assertEqual(self.sh("haiku-editor", "claude -p x"), "deny")
+        self.assertEqual(self.sh("haiku-editor", "git status"), "allow")
+
+
+class HaikuReportTest(HookTest):
+    """The last message of a Haiku subagent."""
+
+    SCOUT_GOOD = [
+        "STATUS: FOUND\nsrc/session.py:42 def expire_session(user):\nsrc/login.py:18 calls it.",
+        "STATUS: NOT FOUND\nNo file under src/ names a session expiry.",
+        "STATUS: NOT FOUND",
+        "\n**STATUS:** FOUND\nsrc/a.py:1",
+    ]
+    SCOUT_BAD = [
+        "I found it in src/session.py:42.",
+        "src/session.py:42\nSTATUS: FOUND",
+        "STATUS: DONE\nsrc/session.py:42",
+        "STATUS: FOUND\n" + "src/a.py:1 x\n" * 400,
+    ]
+    EDITOR_GOOD = [
+        EDITOR_DONE,
+        "STATUS: FAILED\nFILES: none\nCHECK: exit 1",
+        "```\n" + EDITOR_DONE + "\n```",
+        "**STATUS:** DONE\n**FILES:**\n- src/login.py\n- src/session.py\n**CHECK:** `exit 0`",
+    ]
+    EDITOR_BAD = [
+        "STATUS: DONE\nFILES: src/login.py\nCHECK: exit 1",
+        EDITOR_DONE + "\nI renamed the function and the tests pass.",
+        "STATUS: DONE\nFILES: src/login.py",
+        "FILES: src/login.py\nCHECK: exit 0",
+        "STATUS: DONE\nCHECK: exit 0",
+        "STATUS: BLOCKED\nFILES: none\nCHECK: exit 0",
+        "STATUS: DONE\nFILES: renamed it in both files\nCHECK: exit 0",
+        "STATUS: DONE\nFILES: src/login.py\nCHECK: passed",
+        "STATUS: DONE\nFILES: " + ", ".join("src/f%d.py" % i for i in range(300)) + "\nCHECK: exit 0",
+    ]
+
+    def stop(self, message, role, agent_id="agent-1"):
+        payload = {"hook_event_name": "SubagentStop", "agent_id": agent_id, "agent_type": "orchestra:" + role,
+                   "last_assistant_message": message}
+        return self.verdict("check_report.py", payload)
+
+    def handback(self, message, role, agent_id="agent-1"):
+        payload = self.sub(role, "SubagentHandback", {"message": message})
+        payload["agent_id"] = agent_id
+        return self.verdict("check_report.py", payload)
+
+    def test_scout_messages(self):
+        for n, message in enumerate(self.SCOUT_GOOD):
+            self.assertEqual(self.stop(message, "haiku-scout", agent_id="sg%d" % n), "allow", message)
+        for n, message in enumerate(self.SCOUT_BAD):
+            self.assertEqual(self.stop(message, "haiku-scout", agent_id="sb%d" % n), "block", message[:80])
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".orchestra")))  # no report file anywhere
+
+    def test_editor_messages(self):
+        for n, message in enumerate(self.EDITOR_GOOD):
+            self.assertEqual(self.stop(message, "haiku-editor", agent_id="eg%d" % n), "allow", message)
+        for n, message in enumerate(self.EDITOR_BAD):
+            self.assertEqual(self.stop(message, "haiku-editor", agent_id="eb%d" % n), "block", message[:80])
+        self.assertFalse(os.path.exists(os.path.join(self.proj, ".orchestra")))
+
+    def test_refusal_gives_the_format(self):
+        payload = {"hook_event_name": "SubagentStop", "agent_id": "f1", "agent_type": "orchestra:haiku-editor",
+                   "last_assistant_message": "All done."}
+        reason = self.run_hook("check_report.py", payload)["reason"]
+        self.assertIn("CHECK: exit", reason)
+        self.assertNotIn("REPORT:", reason)
+        payload.update(agent_id="f2", agent_type="orchestra:haiku-scout")
+        self.assertIn("STATUS: NOT FOUND", self.run_hook("check_report.py", payload)["reason"])
+
+    def test_retry_limit(self):
+        for role in ("haiku-editor", "haiku-scout"):
+            with self.subTest(role=role):
+                results = [self.stop("a summary that ignores the format", role, agent_id=role) for _ in range(4)]
+                self.assertEqual(results, ["block", "block", "block", "warn"])
+
+    def test_no_metadata_is_recorded(self):
+        self.assertEqual(self.handback(EDITOR_DONE, "haiku-editor"), "allow")
+        self.assertEqual(self.stop("", "haiku-editor"), "allow")
+        self.assertEqual(self.stop("STATUS: FOUND\nsrc/a.py:1", "haiku-scout", agent_id="m2"), "allow")
+        self.assertFalse(os.path.exists(os.path.join(self.state, "meta")))
+
+    def test_handback_path(self):
+        for role, good, bad in (("haiku-scout", self.SCOUT_GOOD, self.SCOUT_BAD),
+                                ("haiku-editor", self.EDITOR_GOOD, self.EDITOR_BAD)):
+            for n, message in enumerate(good):
+                agent = "%s-g%d" % (role, n)
+                self.assertEqual(self.handback(message, role, agent), "allow", message)
+                self.assertEqual(self.stop("", role, agent), "allow")  # already handed back through the tool
+            for n, message in enumerate(bad):
+                self.assertEqual(self.handback(message, role, "%s-b%d" % (role, n)), "deny", message[:80])
+
+    def test_other_roster_subagents_keep_their_format(self):
+        self.assertEqual(self.stop(EDITOR_DONE, "sonnet-builder", agent_id="o1"), "block")
+        self.assertEqual(self.stop("STATUS: FOUND\nsrc/a.py:1", "opus-analyst", agent_id="o2"), "block")
+
+
+class HooksFileTest(unittest.TestCase):
+    def test_subagent_stop_matcher(self):
+        import re
+        with open(os.path.join(ROOT, "hooks", "hooks.json"), encoding="utf-8") as f:
+            hooks = json.load(f)["hooks"]
+        matchers = [entry["matcher"] for entry in hooks["SubagentStop"]]
+        self.assertEqual(len(matchers), 1)
+        pattern = re.compile(matchers[0])
+        for name in ("opus-engineer", "opus-analyst", "sonnet-builder", "sonnet-writer", "haiku-scout", "haiku-editor"):
+            self.assertTrue(pattern.search("orchestra:" + name), name)
+        for name in ("orchestra:general-purpose", "haiku-scout", "other:haiku-scout", "orchestra:haiku-scout-x"):
+            self.assertFalse(pattern.search(name), name)
+
+
 class DoctorTest(HookTest):
     def test_doctor_runs(self):
         self.write(UNIT + "/brief.md", BRIEF)

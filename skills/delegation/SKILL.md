@@ -6,7 +6,7 @@ user-invocable: false
 
 # Choosing the subagent and the effort level
 
-These rules select the model and effort of Opus and Sonnet subagents only. The user sets the Fable conductor's effort directly in the UI, using the control below the prompt input. Orchestra does not change the conductor's effort.
+These rules select the model and effort of the Opus and Sonnet subagents that carry out tasks. Work that meets the conditions under "Haiku calls" in your instructions is not a task: it goes to a Haiku subagent directly, with no task spec and none of the steps below. Check that first, for every piece of work. The user sets the Fable conductor's effort directly in the UI, using the control below the prompt input. Orchestra does not change the conductor's effort.
 
 Use this before every task's initial delegation and again for its second rework round, using the current task spec and review history. The first rework round goes back to the same subagent with its model and effort unchanged; it needs no new selection. Decide in three steps: the kind of work, then the model, then the effort level. Do not pick by how hard the task feels. Answer the questions below from the task spec and review history.
 
@@ -45,7 +45,7 @@ Each subagent has a default. Pass `effort` on the Agent call only when a row bel
 
 | Effort | Use it when |
 |---|---|
-| `low` | The change is mechanical and has one step: a rename, a moved file, a changed constant, the same edit repeated across files. The task spec must give the exact command that checks it |
+| `low` | The change is mechanical and has one step, but the request does not determine the text completely, so it is not an `orchestra:haiku-editor` call: the same kind of edit with a detail to work out at each site, a moved file whose references have to be found. The task spec must give the exact command that checks it |
 | `medium` | The default. The task is well specified |
 | `high` | No Opus rule from step 2 applies, and the approach is already decided, but completing the task takes many implementation and verification steps. Or the task spec leaves small choices that do not reach beyond the edited files. A mechanical one-step change repeated across files still uses `low` |
 | `xhigh`, `max` | Do not use. Give the task to `orchestra:opus-engineer` instead |
@@ -68,7 +68,7 @@ Why: Opus at `medium` already performs at the level where earlier Opus models ne
 
 | Effort | Use it when |
 |---|---|
-| `medium` | The question is bounded and has one answer in the code: where something is defined, what calls it, which of two listed options the code already uses |
+| `medium` | The question is bounded and has one answer in the code, but reaching it takes reading how several places work together: what happens to a value between two named points, which of two listed options the code follows. A lookup whose answer is in the files as it stands is an `orchestra:haiku-scout` call or a search of your own, not an analysis task |
 | `high` | The default. A review, a root-cause investigation, a comparison of approaches |
 | `xhigh` | An earlier analysis of the same question turned out wrong or could not reach a conclusion |
 | `low`, `max` | Do not use |

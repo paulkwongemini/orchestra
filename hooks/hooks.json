@@ -140,7 +140,7 @@
     ],
     "SubagentStop": [
       {
-        "matcher": "^orchestra:(opus-engineer|opus-analyst|sonnet-builder|sonnet-writer)$",
+        "matcher": "^orchestra:(opus-engineer|opus-analyst|sonnet-builder|sonnet-writer|haiku-scout|haiku-editor)$",
         "hooks": [
           {
             "type": "command",

@@ -21,12 +21,18 @@ SUB_SKILLS = (DELEGATION_SKILL, DOCUMENTATION_SKILL)
 #   impl     = produces a result. The conductor reviews the result independently
 #              before it reads the report.
 #   readonly = analyzes only. The report is the result.
+# The Haiku subagents do work that needs no judgment and file no report: `haiku-scout` finds
+# and reads (readonly), and `haiku-editor` makes a mechanical edit (impl). Whoever started one
+# checks its result itself.
 ROSTER = {
     "opus-engineer": {"model": "opus", "kind": "impl"},
     "opus-analyst": {"model": "opus", "kind": "readonly"},
     "sonnet-builder": {"model": "sonnet", "kind": "impl"},
     "sonnet-writer": {"model": "sonnet", "kind": "impl"},
+    "haiku-scout": {"model": "haiku", "kind": "readonly"},
+    "haiku-editor": {"model": "haiku", "kind": "impl"},
 }
+HAIKU = tuple(name for name, entry in ROSTER.items() if entry["model"] == "haiku")
 
 # Required headings. Keep these in step with "Document formats" in skills/conductor/SKILL.md.
 BRIEF_HEADINGS = ["Goal", "Out of scope", "Proposed extras", "Constraints", "Acceptance criteria", "Decision rights"]

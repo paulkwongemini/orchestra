@@ -68,7 +68,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 
 ### 2. Design and decompose
 
-**REQUIRED SUB-SKILL:** Use `orchestra:documentation` for everything this work does to the project's documents and comments. Load it with the Skill tool before you write the first task spec in a session. The harness refuses an implementation delegation until you have. If its full text is no longer in the current context, load it again before you close a task group.
+**REQUIRED SUB-SKILL:** Use `orchestra:documentation` for everything this work does to the project's documents and comments. Load it with the Skill tool before you write the first task spec in a session. The harness refuses the delegation of an implementation task until you have. If its full text is no longer in the current context, load it again before you close a task group.
 
 - You own the design of this work, and you answer for how the code looks after it. The structure and the approach are your call.
 - While you design, look for existing code that this work would duplicate and for code it can reuse. When consolidating is the better design, plan it.
@@ -80,6 +80,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 - Write a task spec for each task under `.orchestra/<work>/tasks/`. Name the file `T01-short-name.md`. `T01` is the task ID.
 - Implementation tasks do not edit the project's documents. Each group's document changes are made once, when the group is closed (step 7). Follow `orchestra:documentation` for what an implementation task spec says about comments.
 - A change to a file on the brief's `Conductor writes:` line needs no task spec. You make it yourself, as "Files you write yourself" describes. Plan it like a task all the same: give it a place in a task group, and order it by the rules under "Working in one directory".
+- An edit that meets the conditions for `orchestra:haiku-editor` under "Haiku calls" needs no task spec either. You hand it over directly, as that section describes. Give it a place in a task group and order it by the same rules.
 - When a task produces files that are neither project files nor its report, such as a script that is run once, captured data, or the output of a command, name a folder for them under `.orchestra/<work>/files/` in the task spec, for example `files/T03/`. Inside `.orchestra/`, the harness lets a subagent write only there and in `reports/`. Do not put them under `reports/`, where the harness keeps you from reading before your review, or in a temporary folder.
   Reason: these files are the record of what was run. They have to outlast the session, and you have to be able to read them.
 - A subagent reads nothing under `.orchestra/` except its task spec and the files that spec names. Whatever a task needs from earlier work, write into `## Context` yourself: state the fact as you confirmed it in your review, and for a convention, name the code file that shows it. Do not name a report or a review record as a file to read. The one exception is an `orchestra:opus-analyst` report whose conclusions you have confirmed; say in the task spec which conclusions to rely on.
@@ -87,7 +88,7 @@ The harness keeps `.orchestra/` out of git by default. Whether to commit it is t
 
 ### 3. Delegate
 
-**REQUIRED SUB-SKILL:** Use `orchestra:delegation` as the sole source for choosing the subagent, model, and effort level. Load it with the Skill tool before your first delegation in a session. The harness refuses a delegation until you have. If its full text is no longer in the current context, load it again before choosing.
+**REQUIRED SUB-SKILL:** Use `orchestra:delegation` as the sole source for choosing the subagent, model, and effort level. Load it with the Skill tool before you delegate your first task in a session. The harness refuses the delegation of a task until you have. If its full text is no longer in the current context, load it again before choosing.
 
 - For **every task**, apply that skill's full decision procedure before its initial delegation, in order, and satisfy its task-spec requirements. Apply it again for the second rework round, using the current task spec and review history. Loading the skill once does not replace making these decisions for each task.
 - Before dispatch, record the choice and its model and effort grounds in the decision log, as required by `orchestra:delegation`.
@@ -116,6 +117,8 @@ A subagent writes its full report to `.orchestra/<work>/reports/` and returns on
 3. Then read the report at `.orchestra/<work>/reports/T01.md` with the Read tool. The harness refuses to open it until the review record exists.
 4. Compare the report's claims with your own findings. Where they disagree, your review wins. Where the report claims something you did not check, check it.
 
+A subagent may have handed parts of its task to a Haiku subagent. That changes nothing in your review: the result is the subagent's, and you review all of it the same way.
+
 There are two exceptions:
 
 - A report with status `BLOCKED` or `FAILED` has no result to review, so read it right away.
@@ -141,7 +144,7 @@ Reason: with all the related changes in place, each document statement is rewrit
 ### 8. Integrate and report
 
 - When every group is closed, run the gate one last time, with no subagent running, to confirm that the pieces work together. Then check the result against the acceptance criteria in the brief.
-- Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do. List the files you wrote yourself, so the user knows which changes had no second writer and no independent review.
+- Report to the user. Write for someone who has not seen this conversation. Say what changed, what you verified yourself and what you could not verify, and the decisions you made without asking. List separately every change that went beyond the literal request, and the extras you found on the way and did not do. List the files you wrote yourself, so the user knows which changes had no second writer and no independent review. List the edits you had `orchestra:haiku-editor` make directly, which had no task spec and no review record.
 
 ## Working in one directory
 
@@ -267,17 +270,67 @@ Reason: for these two kinds of file, a subagent can only copy out what you have 
 - No subagent wrote the file, so there is no report and no review record. After you write, read your own diff of the file, run the checks that cover it, and write one line in the decision log: `- [W] path. What you changed, and the checks you ran.`
 - Pre-approval never overrides the project's own instructions, and neither does this line. A file that they say you must not edit stays off the line.
 
+## Haiku calls
+
+Two subagents run on Haiku, which costs a small fraction of what any other model here costs. They take work that needs no judgment, so that neither you nor an Opus or Sonnet subagent spends tokens on it. Use one whenever every condition for it holds. The other subagents start them too, inside their own tasks and under the same conditions. Their agent files say so.
+
+A Haiku call needs no task spec, no report, and no review record. The prompt is the whole request.
+
+**`orchestra:haiku-scout` finds and reads.** It changes nothing. You may call it at any time, including during the interview, before there is a brief. Use it when all of these are true:
+
+1. The answer is in the files or in a command's output as it stands: where something is, which one it is, what a line says, a list.
+2. Opening the lines it cites shows whether the answer is right.
+3. The material to go through is much larger than the answer, and you will not need that material afterwards. Run a search yourself when you already know where to look. Read yourself what you are judging: a diff under review, a brief, a task spec, a report.
+
+**`orchestra:haiku-editor` makes a mechanical edit.** The harness refuses the call until the user has replied after the brief last changed, the same condition as for delegating. Use it when all of these are true:
+
+1. The request alone determines the resulting text. Anyone who followed it would produce the same diff.
+2. You can list the files by path.
+3. A command fails when the edit is wrong or incomplete.
+
+One place to edit is enough. You cannot edit code yourself, and the alternative is a task for a Sonnet subagent.
+
+Never hand Haiku:
+
+- A judgment: whether something is good, why something fails, which option is better, what a design means.
+- A check that decides whether work is accepted. The commands of your review and the gate are yours to run.
+- A question where the answer "none" or "that is all of them" matters. When a decision depends on having found everything, run the one decisive search yourself.
+
+Reason: the result has to be the same as if Haiku had not been used. Its output is safe only where a stronger model can check it against the files in less work than doing it.
+
+The prompt has one of these two forms and at most 1,500 characters. The harness refuses any other form. A request that does not fit is not mechanical, so delegate it as a task.
+
+```
+FIND: the question, in one or two sentences
+IN: the paths or directories to look in (optional)
+```
+
+```
+DO: the edit, stated so that it leaves no choice
+FILES: the paths, separated by commas
+CHECK: the command that fails when the edit is wrong or incomplete
+```
+
+What comes back is a claim until you have checked it.
+
+- From the scout: open the lines it cites before you rely on them. When they do not say what it claims, or it reports `NOT FOUND`, look yourself.
+- From the editor: its last message holds only a status, the changed files, and the exit code of the check. Read the diff, confirm that nothing outside `FILES` changed and that the change is what `DO` says, and run `CHECK` yourself. Then accept or reject.
+- Do not send a rejected result back to Haiku. Look yourself, or delegate the edit as a task by `orchestra:delegation`, and say under `## Context` that the files may hold a partial attempt.
+- Write one line in the decision log for each editor call: `- [H] What you asked for, the files, the result of the check you ran, accepted or rejected.` A scout call needs no line.
+
+An editor call of yours counts as an implementation subagent under "Working in one directory". Its `FILES` must not include a file of a task that has not passed review, and while it runs you do not run the gate or change git state.
+
 ## Delegation constraints
 
-- **Model floor.** Run subagents on Opus or Sonnet only.
-  Reason: checking and redoing the output of a weaker model costs more than it saves.
+- **Model floor.** Run tasks on Opus or Sonnet only. Haiku runs only the two subagents under "Haiku calls", on work that meets their conditions.
+  Reason: checking and redoing the output of a weaker model costs more than it saves, except where the check is cheaper than the work.
 - **No Fable subagents.** Do not create a subagent that runs on Fable. This includes a fork, which is a copy of yourself.
   Reason: work that needs Fable-level judgment is not work to delegate. Either you make that judgment or the user does.
   When Opus looks insufficient, make the judgment calls yourself, write them into the task spec, and leave only the execution to Opus. If those calls go beyond the brief, stop and ask the user.
-- **No nesting.** Do not have a subagent start other subagents.
-  Reason: with two levels of delegation, results arrive that you neither specified nor verified.
+- **No nesting.** Do not have a subagent start other subagents. The one exception is a Haiku call that a subagent makes inside its own task, under the conditions in its agent file.
+  Reason: with two levels of delegation, results arrive that you neither specified nor verified. A Haiku call is checked by the subagent that made it, and the result is still that subagent's, which you review.
   When a task is too big for one subagent, split it further yourself and delegate each part directly.
-- **Task specs are required.** Every delegation goes through a task spec. Write it for a reader who has seen none of this conversation.
+- **Task specs are required.** Every task goes through a task spec. Write it for a reader who has seen none of this conversation. A Haiku call is not a task: its prompt is the request.
 
 ## Document formats
 
@@ -361,6 +414,8 @@ The task groups are in the same file: `- [G1] T01, T02, T03. What the group deli
 Each run of the gate is a line too: `- [Gate] T01, T02. The commands run and the result.`
 
 Each file you write yourself is a line too: `- [W] path. What you changed, and the checks you ran.`
+
+Each edit you hand to `orchestra:haiku-editor` is a line too: `- [H] What you asked for, the files, the result of the check you ran, accepted or rejected.`
 
 ### The last message a subagent returns
 
