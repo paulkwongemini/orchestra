@@ -24,6 +24,10 @@ A second question is tested on the same branch: **can Orchestra work from instru
 5. **Reports.** A worker writes its full report to `.orchestra/<work>/reports/T01.md` and returns the short status lines, as a Claude subagent does.
 6. **agy from the same spec.** agy mode reuses the Codex mode's instructions, changing only the CLI facts: commands, flags, models, efforts, isolation, sandbox.
 
+## Installation boundary
+
+The plugin installs and works with the two commands it uses now: `claude plugin marketplace add paulkwongemini/orchestra` and `claude plugin install orchestra@orchestra`. Nothing may need a second setup step: no background service, no change to the user's Codex or agy configuration, no file written into the user's projects to set it up. What the modes need goes into the plugin's own files, or into settings its scripts pass for each run. The Codex CLI and `agy`, installed and signed in, are prerequisites, like `python3`. Set by the user on 2026-11-19.
+
 ## Out of scope
 
 - Reducing the Codex or Gemini usage per task.
@@ -62,6 +66,7 @@ The machine has `codex-cli 0.170.0`, logged in with ChatGPT.
 - **`/tmp` for a read-only run.** `/tmp` and `$TMPDIR` are writable by default. `-c sandbox_workspace_write.exclude_slash_tmp=true` and `-c sandbox_workspace_write.exclude_tmpdir_env_var=true` take them out. Without them, a read-only run on a project under `/tmp` could have written project files.
 - **The JSON event stream.** With `--json`, stdout is one event per line: `thread.started` carries the session id as `thread_id`, and `turn.completed` carries `usage` with `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` and `reasoning_output_tokens`.
 - **Base cost.** A run that answers one word reads 16,541 input tokens, 13,440 of them cached.
+- **Hooks for one run.** Codex loads hooks from `hooks.json` files and from `[hooks]` tables in `config.toml` ([Codex hooks](https://learn.chatgpt.com/docs/hooks)). A `PreToolUse` hook passed on the command line, `-c 'hooks.PreToolUse=[{matcher="Bash",hooks=[{type="command",command="python3 <script>",timeout=10}]}]'`, together with `--dangerously-bypass-hook-trust`, ran in `codex exec` and refused the command it was meant to refuse; the other command ran. Its input has the same shape as a Claude Code hook's: `hook_event_name`, `tool_name: "Bash"`, `tool_input.command`, `cwd`, `session_id`, `model`. Its `permissionDecision: "deny"` output is the Claude Code format. So a plugin can guard a worker's shell commands during the run without touching the user's Codex config. File edits reach the same hook: with `matcher=".*"`, `apply_patch` arrived as `tool_name: "apply_patch"` with the patch text in `tool_input.command`, whose `*** Add File:`, `*** Update File:` and `*** Delete File:` lines name each path, and a refused edit left no file. One caution: the bypass flag also runs every other enabled hook without its trust review.
 - **Not verified:** how a run behaves when the Codex plan's limit is reached, how to read the Codex usage limit from the command line, whether a resume's token count is per turn or cumulative, and a network check on a resumed run.
 
 Measured runs, all on `gpt-6.2-astra`:
@@ -129,6 +134,13 @@ No `gemini` command is on the PATH. The user named the Antigravity CLI, `agy` 1.
 - `agy models` lists `gemini-4-neon`, `gemini-4-argon` and `gemini-4-hydrogen` at several efforts, `gemini-3.8-flash`, and Claude and GPT-OSS models. The effort is part of the model id, as in `gemini-4-neon-high`.
 - Nothing else is known. The checklist below has not been answered for it, and no model has been called through it.
 - The user will use Gemini 4 Neon and Gemini 4 Hydrogen only, not Argon (2026-11-19).
+- **Hooks.** [Antigravity hooks](https://antigravity.google/docs/hooks) are read from a workspace's `.agents/hooks.json`, the global `~/.gemini/config/hooks.json`, and installed agy plugins; hooks in `settings.json` are not loaded, and `--settings` refuses a `hooks` key (`unknown setting "hooks"`). Each of those places is outside the installation boundary, except one layout, which worked: `agy -p` started in a folder of the plugin's own that holds `.agents/hooks.json`, with the project added through `--add-dir`. Its `PreToolUse` hook on `run_command` ran for both commands, let one through and refused the other with `{"decision": "deny", "reason": ...}`, which the worker saw as `tool call denied by pre-tool hook`. No trust prompt appeared.
+- **Hook input** differs from Claude Code's and Codex's: `hookEventName`, `toolCall.name`, `toolCall.args.CommandLine`, `cwd`, `conversationId`, `modelName`, `workspacePaths`, and `lastUserInput`, the whole prompt, so a guard must judge the command and never the prompt text. The first test refused both commands for that reason.
+- **One-shot runs.** `agy -p --output-format json` printed one JSON object: `conversation_id`, `status` (`SUCCESS`), `response`, `num_turns`, `duration_seconds` and `usage` (`input_tokens`, `output_tokens`, `thinking_tokens`, `cache_read_tokens`, `total_tokens`). With stdin closed it ran two `echo` commands without asking for approval. Hydrogen at `low` took about 9 seconds and 15,700 input tokens.
+- **The added project's files.** With the project added through `--add-dir`, agy loaded its `AGENTS.md`, whose rule the worker followed, and its `.agents/hooks.json`, whose hook ran beside the plugin's. A user's own project hooks therefore run in a worker's run too.
+- **File edits reach `PreToolUse`.** The file-writing tool arrived as `write_file` with `Path`, `Content` and `Overwrite`. A matcher of `*` or `.*` catches every tool; `run_command` catches only the shell.
+- **The default sandbox of `-p`.** With no permission flag, `rm -rf` inside the workspace ran without a question, `curl` failed with `Could not resolve host`, and `git commit` failed on `.git/index.lock`. No approval was asked for and nothing waited. After the network failure agy said the command could be run again with `BypassSandbox` set to request the user's permission; a hook can refuse such a call. These runs used a project under `/tmp`; a project elsewhere has not been tried.
+- **Resume.** `agy -p --conversation <id>`, started from the same folder without `--add-dir`, remembered the earlier turn, kept the added project in the workspace (its hook ran and its `AGENTS.md` rule held), and wrote inside it.
 
 ### The vendors' prompting guides
 
@@ -203,7 +215,8 @@ A script, `scripts/worker.py`, makes each run so that the conductor does not ass
 
 - **`run`** takes the task spec, the role, the effort and the CLI. It builds the command with every fact above applied: the model and effort, plugins and MCP servers off, the sandbox, the folders the role may write, the network, the prompt from a file, and stdin closed.
 - **Writable folders by role.** An implementation role gets the project. A read-only role gets only its report path and its `files/` folder. `.git` stays read-only either way.
-- **The network** is restricted unless the brief pre-approves `deps` or `http`.
+- **The network** is open unless the brief's `## Constraints` says `Worker network: blocked`, which suits a sensitive repository. The interview asks once, with open as the default. The user chose this on 2026-11-19, together with the guard below.
+- **The guard.** Each run carries `scripts/worker_guard.py` as a `PreToolUse` hook of the CLI itself: for Codex through `-c 'hooks.PreToolUse=[...]'` with `--dangerously-bypass-hook-trust`, for agy through a folder of the plugin's own that holds `.agents/hooks.json` (agy mode, not built yet). It judges each shell command and file edit by the claude mode's rules for a Claude subagent, reusing `guard_main.py`, with the brief's pre-approved keys. The script lists its refusals as `GUARD:` lines. In a real run it refused `claude -p` and let `ls` through, while the worker's own instructions had already kept it from an unapproved `npm install` and an edit to the brief. An implementation role's shell redirects are not judged, as in the claude mode; the check after the run flags what they change under `.orchestra/`.
 - **`resume`** takes a review comment and passes the same settings again with `-c`, because a resume does not keep them.
 - **What it keeps.** It saves the session id, the last message and the token count under `files/<task>/`. It prints a few lines: the status line, the time, the tokens, the changed files, and warnings.
 - **After each run it checks the run against its limits.** These are the hook duties that a check after the run can cover: files changed outside the task spec's scope, any change to the brief, the task specs, the review records or the decision log, a change to git state, and a `DONE` report without a valid verification record. That last check uses the validator of `check_report.py`. It prints problems, never the report's text, so the review still comes first.
@@ -224,7 +237,8 @@ On 2026-11-19 these are built on the branch, with tests that call no model:
 
 - **Modes and hooks.** One mode per session in `scripts/common.py`. `/orchestra:conduct-codex` sets `codex`. In `codex` and `agy` every guard exits at once, and `require_skill.py` keeps only the Opus effort question. 7 hook tests, 217 in all.
 - **Instructions.** `skills/conduct-codex`, `skills/cli-workers` and `skills/codex`, and the four roles under `roles/`.
-- **Runs.** `scripts/worker.py` with 16 tests against a fake `codex`, and the four real runs above.
+- **Runs.** `scripts/worker.py` with 18 tests against a fake `codex`, and the real runs above.
+- **The worker guard.** `scripts/worker_guard.py` with 11 tests in both the Codex and the agy formats, and one real Codex run in which it refused `claude -p`.
 - **The audit.** `scripts/audit.py` with 8 tests on synthetic transcripts. On this session's own transcript it found the one call a hook refused in the Fable part, and a task spec written before `orchestra:documentation` was loaded.
 
 Not done yet:

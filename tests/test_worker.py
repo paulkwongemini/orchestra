@@ -34,6 +34,10 @@ FAKE_CODEX = textwrap.dedent('''\
         open(path, "w", encoding="utf-8").write(text)
     if "last" in plan:
         open(argv[argv.index("-o") + 1], "w", encoding="utf-8").write(plan["last"])
+    record = os.path.dirname(argv[argv.index("-o") + 1])
+    for refusal in plan.get("refused", []):
+        with open(os.path.join(record, "guard.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(dict(refusal, at=__import__("time").time())) + "\\n")
     print(json.dumps({"type": "thread.started", "thread_id": plan.get("session", "sess-1")}))
     print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 16541, "cached_input_tokens": 13440, "output_tokens": 812}}))
     sys.stderr.write(plan.get("stderr", ""))
@@ -131,8 +135,19 @@ class WorkerTest(unittest.TestCase):
         self.assertIn('mcp_servers."my.server".enabled=false', configs)
         self.assertIn('sandbox_mode="workspace-write"', configs)
         self.assertIn("sandbox_workspace_write.writable_roots=[]", configs)
-        self.assertIn("sandbox_workspace_write.network_access=false", configs)
+        self.assertIn("sandbox_workspace_write.network_access=true", configs)
         self.assertEqual(self.option(argv, "--disable"), ["plugins"])
+        hooks = [v for v in configs if v.startswith("hooks.PreToolUse=")]
+        self.assertEqual(len(hooks), 1)
+        self.assertIn('matcher=".*"', hooks[0])
+        self.assertIn("worker_guard.py", hooks[0])
+        self.assertIn("--dangerously-bypass-hook-trust", argv)
+        context = os.path.join(self.proj, UNIT, "files", "T01", "cli", "guard.json")
+        self.assertIn(context, hooks[0])
+        with open(context, encoding="utf-8") as f:
+            ctx = json.load(f)
+        self.assertEqual((ctx["kind"], ctx["task"], ctx["keys"]), ("impl", "T01", []))
+        self.assertTrue(ctx["log"].endswith("files/T01/cli/guard.jsonl"))
         self.assertIn("--json", argv)
         self.assertEqual(self.option(argv, "-C"), [os.path.realpath(self.proj)])
         self.assertEqual(argv[-1], "-")
@@ -149,10 +164,27 @@ class WorkerTest(unittest.TestCase):
             argv = self.calls()[-1]["argv"]
             self.assertEqual(self.option(argv, "-m"), [model], role)
             self.assertIn('model_reasoning_effort="%s"' % effort, self.option(argv, "-c"), role)
-        self.run_task("--effort", "max", "--network", role="engineer")
+        self.run_task("--effort", "max", role="engineer")
+        self.assertIn('model_reasoning_effort="max"', self.option(self.calls()[-1]["argv"], "-c"))
+
+    def test_the_brief_decides_the_network_and_the_keys(self):
+        self.write(UNIT + "/brief.md", "## Constraints\nWorker network: blocked\n\n## Decision rights\nPre-approved: deps, http\n")
+        self.run_task()
         configs = self.option(self.calls()[-1]["argv"], "-c")
-        self.assertIn('model_reasoning_effort="max"', configs)
-        self.assertIn("sandbox_workspace_write.network_access=true", configs)
+        self.assertIn("sandbox_workspace_write.network_access=false", configs)
+        with open(os.path.join(self.proj, UNIT, "files", "T01", "cli", "guard.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["keys"], ["deps", "http"])
+        self.write(UNIT + "/brief.md", "## Constraints\nWorker network: open\n")
+        self.run_task()
+        self.assertIn("sandbox_workspace_write.network_access=true", self.option(self.calls()[-1]["argv"], "-c"))
+
+    def test_the_guards_refusals_are_listed(self):
+        self.plan({"write": {"src/login.py": "new\n", UNIT + "/reports/T01.md": REPORT_DONE}, "last": LAST_DONE,
+                   "refused": [{"tool": "Bash", "command": "npm install left-pad", "paths": [],
+                                "reason": "This command installs or changes dependencies. The work's brief does not pre-approve it."}]})
+        code, out = self.run_task()
+        self.assertEqual(code, 0, out)
+        self.assertIn("GUARD: refused Bash `npm install left-pad`: This command installs or changes dependencies", out)
 
     def test_an_analyst_writes_only_its_report_folder_and_its_files(self):
         self.plan({"write": {UNIT + "/reports/T01.md": REPORT_DONE}, "last": LAST_DONE})
@@ -244,7 +276,8 @@ class WorkerTest(unittest.TestCase):
     # ---- resume
 
     def test_resume_passes_the_settings_again(self):
-        self.run_task("--effort", "medium", "--network", role="engineer")
+        self.run_task("--effort", "medium", role="engineer")
+        self.write(UNIT + "/brief.md", "## Decision rights\nPre-approved: deps\n")  # approved between the rounds
         message = self.write(UNIT + "/files/T01/rework-1.md", "The test for an expired token fails: see tests/login.\n")
         self.plan({"write": {"src/login.py": "newer\n", UNIT + "/reports/T01.md": REPORT_DONE}, "last": LAST_DONE, "session": "sess-1"})
         code, out = self.worker("resume", "--task", self.spec, "--message", message)
@@ -260,6 +293,9 @@ class WorkerTest(unittest.TestCase):
         self.assertTrue(self.option(argv, "-o")[0].endswith("last-message-2.md"))
         self.assertEqual(second["cwd"], first["cwd"])
         self.assertEqual(second["stdin"], "")
+        self.assertIn("--dangerously-bypass-hook-trust", argv)
+        with open(os.path.join(self.proj, UNIT, "files", "T01", "cli", "guard.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["keys"], ["deps"])
 
     def test_resume_needs_an_earlier_run_and_a_message(self):
         message = self.write(UNIT + "/files/T01/rework-1.md", "fix it\n")

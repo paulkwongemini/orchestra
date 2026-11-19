@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """Run a task on another vendor's coding CLI for a conductor in a CLI mode, and check the run.
 
-    worker.py run    --cli codex --task <task spec> --role <role> [--effort <level>] [--network]
+    worker.py run    --cli codex --task <task spec> --role <role> [--effort <level>]
     worker.py resume --task <task spec> --message <file>
 
 `run` starts a fresh session on the task spec. `resume` continues the task's last session with
 the conductor's review comment, read from a file, with the same settings: a resumed Codex run
 does not keep the sandbox options of the first run, so they are passed again.
 
-This is a tool the conductor runs. It enforces nothing. It builds the command so that the
-settings are right every time, keeps the run's record under `files/<task>/cli/`, and after the
-run prints a few lines: the status, the time, the tokens, the changed files, and a warning for
-each point that a hook would have flagged:
+This is a tool the conductor runs. It builds the command so that the settings are right every
+time. The network is open unless the brief's `## Constraints` has the line
+`Worker network: blocked`. A PreToolUse hook, `worker_guard.py`, goes with every run and refuses
+what the claude mode's hooks refuse a Claude subagent, with the brief's pre-approved keys. The
+script keeps the run's record under `files/<task>/cli/`, and after the run prints a few lines:
+the status, the time, the tokens, the changed files, what the guard refused, and a warning for
+each point that a check after the run can see:
 
   - a file changed outside the paths under the task spec's `## Scope and limits`
   - a change under `.orchestra/` other than the task's report and its `files/<task>/` folder
@@ -27,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -48,6 +52,9 @@ ROLES = {
 }
 
 # Folders whose changes say nothing about the work: tool caches and the like.
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_guard.py")
+NETWORK_LINE = re.compile(r"^\W*worker network\W*[:：]\s*(blocked|open)\b", re.I | re.M)
+
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "node_modules", ".venv", "venv"}
 
 TASK_PATH = re.compile(r"^(?P<project>.*)/\.orchestra/(?P<work>[^/]+)/tasks/(?P<file>(?P<id>T\d+)[^/]*\.md)$")
@@ -104,6 +111,11 @@ class Codex:
                  "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=%s" % ("true" if s["kind"] == "readonly" else "false"),
                  "-c", "sandbox_workspace_write.network_access=%s" % ("true" if s["network"] else "false"),
                  "--skip-git-repo-check", "--json"]
+        # The guard is passed for this run only, so it needs no trust review and touches no
+        # config. The flag also runs the user's other enabled hooks without their review.
+        guard = "%s %s %s" % (shlex.quote(sys.executable), shlex.quote(GUARD), shlex.quote(s["guard_context"]))
+        args += ["-c", "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=%s,timeout=15}]}]" % json.dumps(guard),
+                 "--dangerously-bypass-hook-trust"]
         return args
 
     def run_command(self, s, last_message):
@@ -161,6 +173,31 @@ def locate(task_arg):
     files = os.path.join(unit, "files", tid)
     return {"spec": spec, "project": project, "unit": unit, "task": tid, "report": report,
             "files": files, "record": os.path.join(files, "cli")}
+
+
+def brief_settings(unit):
+    """The brief's pre-approved keys, and whether the workers may use the network (open unless blocked)."""
+    text = c.read_text(os.path.join(unit, "brief.md"))
+    keys = sorted(c.preapproved_keys(text))
+    m = NETWORK_LINE.search(c.section_body(text, "Constraints") or "")
+    return keys, not (m and m.group(1).lower() == "blocked")
+
+
+def guard_refusals(path, since):
+    """What the guard refused since a moment, as (tool, what, reason) tuples."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                if r.get("at", 0) >= since and not r.get("fault"):
+                    out.append((r.get("tool"), r.get("command") or ", ".join(r.get("paths") or []), r.get("reason", "")))
+    except OSError:
+        pass
+    return out
 
 
 def scope_paths(spec, project):
@@ -232,6 +269,7 @@ def execute(cli, cmd, cwd, stdin, paths, round_no):
         raise Fail("`%s` could not be started: %s" % (cmd[0], e))
     elapsed = time.time() - started
     after, git_after = snapshot(paths["project"]), git_state(paths["project"])
+    paths["started"] = started
     return code, elapsed, events, errors, changed(before, after), git_before != git_after
 
 
@@ -265,6 +303,11 @@ def report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_chan
 
     work = [p for p in changes if not os.path.join(paths["project"], p).startswith(own)
             and os.path.join(paths["project"], p) != paths["report"]]
+    refused = guard_refusals(os.path.join(paths["record"], "guard.jsonl"), paths.get("started", 0))
+    for tool, what, reason in refused[:10]:
+        lines.append("GUARD: refused %s `%s`: %s" % (tool, what[:120], reason.split(". ")[0]))
+    if len(refused) > 10:
+        lines.append("GUARD: and %d more refusals, in `%s`" % (len(refused) - 10, rel(os.path.join(paths["record"], "guard.jsonl"))))
     lines.append("CHANGED: %s" % (", ".join(work[:30]) + (" and %d more" % (len(work) - 30) if len(work) > 30 else "") if work else "nothing"))
 
     scope = scope_paths(paths["spec"], paths["project"])
@@ -321,8 +364,14 @@ def cmd_run(args):
         cwd, roots = paths["project"], []
     else:
         cwd, roots = paths["files"], [os.path.dirname(paths["report"])]
+    keys, network = brief_settings(paths["unit"])
+    context = os.path.join(paths["record"], "guard.json")
+    with open(context, "w", encoding="utf-8") as f:
+        json.dump({"kind": kind, "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
+                   "keys": keys, "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
     s = {"cli": cli.name, "role": args.role, "kind": kind, "model": cli.models[args.role], "effort": effort,
-         "network": bool(args.network), "cwd": cwd, "writable_roots": roots, "session_id": None, "rounds": 1}
+         "network": network, "keys": keys, "cwd": cwd, "writable_roots": roots, "guard_context": context,
+         "session_id": None, "rounds": 1}
     paths["last_message"] = os.path.join(paths["record"], "last-message-1.md")
     prompt = PROMPT.format(role=os.path.join(ROLES_DIR, args.role + ".md"), spec=paths["spec"], report=paths["report"])
     cmd = cli.run_command(s, paths["last_message"])
@@ -346,6 +395,13 @@ def cmd_resume(args):
     if not message:
         raise Fail("The message file `%s` is empty or cannot be read." % args.message)
     cli = CLIS[s["cli"]]()
+    # The brief may have changed since the first run, for example with a key the user approved.
+    s["keys"], s["network"] = brief_settings(paths["unit"])
+    context = s.get("guard_context") or os.path.join(paths["record"], "guard.json")
+    s["guard_context"] = context
+    with open(context, "w", encoding="utf-8") as f:
+        json.dump({"kind": s["kind"], "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
+                   "keys": s["keys"], "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
     s["rounds"] = int(s.get("rounds", 1)) + 1
     paths["last_message"] = os.path.join(paths["record"], "last-message-%d.md" % s["rounds"])
     cmd = cli.resume_command(s, paths["last_message"], message)
@@ -364,7 +420,6 @@ def main(argv=None):
     run.add_argument("--task", required=True)
     run.add_argument("--role", required=True)
     run.add_argument("--effort")
-    run.add_argument("--network", action="store_true", help="allow network access, when the brief pre-approves deps or http")
     resume = sub.add_parser("resume", help="continue the task's last session with a review comment")
     resume.add_argument("--task", required=True)
     resume.add_argument("--message", required=True, help="a file with the review comment")

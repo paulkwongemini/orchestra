@@ -10,7 +10,7 @@ The point of the mode is to spend the other vendor's usage on the implementation
 
 ## No harness in this mode
 
-The plugin's hooks do nothing in a CLI mode, with one exception: an Opus conductor at low or medium effort is asked about it once, as in the claude mode. Wherever the conductor's instructions say that the harness refuses, checks or records something, nobody does it now but you. Keep each of those rules as if a hook still held you to it:
+The plugin's hooks do not guard you in a CLI mode, with one exception: an Opus conductor at low or medium effort is asked about it once, as in the claude mode. Wherever the conductor's instructions say that the harness refuses, checks or records something about your own calls, nobody does it now but you. Keep each of those rules as if a hook still held you to it:
 
 - **You do not implement.** You write your own documents in the work folder and the files on the brief's `Conductor writes:` line, and nothing else.
 - **The brief comes first.** No run before the user has replied after the brief last changed. No run without a task spec that has every required section.
@@ -18,6 +18,8 @@ The plugin's hooks do nothing in a CLI mode, with one exception: an Opus conduct
 - **Review before the report.** Do not open a report under `reports/` before you have written the review record of that task. The same goes for a run's record under `files/<task>/cli/`, beyond the lines the script printed. A `BLOCKED` or `FAILED` report you read at once.
 - **Load the rules you use.** Load `orchestra:interview` before the first question of a piece of work, and `orchestra:documentation` before the first task spec. Do not load `orchestra:delegation`: "Roles" below replaces it.
 - **After compaction,** read the brief, the decision log and the review records of the work folder before you go on. Nothing reminds you to.
+
+The workers are guarded, by a hook of their own CLI that each run carries. See "A run".
 
 The mode also tests whether these rules hold without hooks. Do not test them: keep them. If you find that you broke one, say so in the final report.
 
@@ -57,7 +59,11 @@ The format and the headings are the same. The vendors' guides for these models a
 - **Scope.** Under `## Scope and limits`, name every path the task may edit in backticks, one path each. After the run, the script compares the changed files with these paths.
 - **Project rules.** The worker reads the project's `AGENTS.md` by itself, but not `CLAUDE.md`. Put every rule from `CLAUDE.md` that the task must follow under `## Context`.
 - **Blocking.** Nobody answers the worker while it runs. Make `## If blocked` say exactly when it stops and reports `BLOCKED`.
-- **Pre-approval.** No key reaches the worker on its own. Write under `## Context` which kinds of command the brief pre-approves for the task. A worker never changes git state: `.git` is read-only to it.
+- **Pre-approval.** The run's guard reads the brief's `Pre-approved:` line, and the worker reads only the spec. Write under `## Context` which kinds of command the brief pre-approves for the task. A worker never changes git state: `.git` is read-only to it.
+
+## The network, settled in the interview
+
+Workers may use the network unless the brief blocks it. Blocking suits a sensitive repository, whose code must not leave the machine. In the interview, ask once whether the workers may use the network, with open as the default and the reason for blocking. Write the answer under `## Constraints` in the brief, as `Worker network: open` or `Worker network: blocked`. With no such line, the network is open.
 
 ## A run
 
@@ -67,14 +73,15 @@ Start every run with the plugin's script. Do not call the CLI yourself: its sett
 python3 <plugin>/scripts/worker.py run --cli codex --task .orchestra/<work>/tasks/T01-name.md --role implementer --effort medium
 ```
 
-- Add `--network` only when the brief pre-approves `deps` or `http` and the task needs the network.
+- **What each run carries.** The script reads the brief at every run: its `Worker network:` line, and its `Pre-approved:` keys. It passes the run a guard, a PreToolUse hook of the CLI's own, which refuses what the claude mode's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, a data command that names production, an edit inside `.orchestra/` other than the task's report and `files/` folder, any project edit by a read-only role, and starting a Claude session. It reads the command line, so it is a tripwire, not a sandbox. Change the brief before a run, not during it.
 - A run can take longer than a command in the foreground may. Start it in the background, end your turn, and go on when it reports, as you would wait for a subagent. Do not poll.
 - Runs that may go side by side under "Working in one directory" are started in the same message.
 
 ## After a run
 
-The script prints a few lines: the task, the CLI, the model and the effort, the time, the tokens, the session, the status from the worker's last message, the changed files, where the run's record is, and a `WARN:` line for each problem it found. It exits with 0, with 2 when it printed warnings, and with 1 when the run did not finish or could not start. It never prints the report's text.
+The script prints a few lines: the task, the CLI, the model and the effort, the time, the tokens, the session, the status from the worker's last message, a `GUARD:` line for each call the guard refused, the changed files, where the run's record is, and a `WARN:` line for each problem it found. It exits with 0, with 2 when it printed warnings, and with 1 when the run did not finish or could not start. It never prints the report's text.
 
+- **A `GUARD:` line** is a refusal that worked, not a failure. Look at what the worker did instead. A task that needs the refused command needs a key in the brief, which only the user can approve.
 - **A change outside the scope, or to git state,** fails the review. Send it back as rework with the warning as evidence.
 - **A change under `.orchestra/`** outside the task's report and its `files/<task>/` folder is a worker that touched your documents. Put each one back as it was before the run, from what you wrote. If it was the brief, also tell the user. Then review as usual.
 - **A report that says `DONE` without a valid verification record** goes back as rework, after your own review.
