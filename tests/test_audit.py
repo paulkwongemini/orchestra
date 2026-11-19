@@ -162,6 +162,18 @@ class AuditTest(unittest.TestCase):
             self.assertIn((rule, "went through"), found, rule)
         self.assertEqual(sum(1 for r, _ in found if r == "A Claude subagent did a task in a CLI mode"), 1)
 
+    def test_agy_mode_needs_the_agy_skill(self):
+        tr = self.tr
+        tr.say("/orchestra:conduct-agy")
+        tr.skills("conductor", "cli-workers", "documentation")
+        tr.tool("Bash", command="python3 worker.py run --cli agy --task %s/tasks/T01-login.md --role implementer" % UNIT)
+        self.assertEqual([f["detail"] for f in self.audit()["findings"]],
+                         ["a run started before `orchestra:agy` was loaded"])
+        tr.skills("agy")
+        tr.tool("Bash", command="python3 worker.py run --cli agy --task %s/tasks/T01-login.md --role implementer" % UNIT)
+        self.assertEqual(len(self.audit()["findings"]), 1)
+        self.assertEqual(self.audit()["findings"][0]["mode"], "agy")
+
     def test_a_run_before_the_brief_is_confirmed(self):
         tr = self.tr
         tr.say("/orchestra:conduct-codex")

@@ -1,10 +1,10 @@
 ---
-description: The conductor's rules when its workers are runs of another vendor's coding CLI instead of Claude subagents. Load it after orchestra:conductor and before the CLI's own skill, once the user has turned a CLI mode on with /orchestra:conduct-codex. Not for the claude mode.
+description: The conductor's rules when its workers are runs of another vendor's coding CLI instead of Claude subagents. Load it after orchestra:conductor and before the CLI's own skill, once the user has turned a CLI mode on with /orchestra:conduct-codex or /orchestra:conduct-agy. Not for the claude mode.
 ---
 
 # Workers that are CLI runs
 
-You are the conductor, as `orchestra:conductor` describes, and the user has turned on a CLI mode: your workers are runs of another vendor's coding CLI instead of Claude subagents. The CLI's own skill, such as `orchestra:codex`, holds the facts of that CLI. This skill holds what changes for you. Where this skill and the conductor's instructions differ, this skill wins.
+You are the conductor, as `orchestra:conductor` describes, and the user has turned on a CLI mode: your workers are runs of another vendor's coding CLI instead of Claude subagents. The CLI's own skill, `orchestra:codex` or `orchestra:agy`, holds the facts of that CLI. This skill holds what changes for you. Where this skill and the conductor's instructions differ, this skill wins.
 
 The point of the mode is to spend the other vendor's usage on the implementation instead of Claude's, with the result's quality unchanged. How a worker gets to its result does not matter. The result you review does.
 
@@ -45,7 +45,7 @@ The CLI's skill says which model each role runs on. The user chose these default
 - `engineer`: `medium` for bounded work with clear integration checks, `xhigh` when interacting causes make the change and its verification hard.
 - `analyst`: `medium` for a bounded survey, `xhigh` for an open-ended investigation, and `max` for one that has to weigh several interacting causes or a wide body of evidence.
 
-Before each run, write one line in the decision log with the role, the model, the effort and the reason: `- [T01] implementer, gpt-6.2-sol, medium. The spec names the file, the change and the test.` For a second rework round, choose again from the current task spec and the review history.
+Before each run, write one line in the decision log with the role, the model, the effort and the reason: `- [T01] implementer, gpt-6.2-sol, medium. The spec names the file, the change and the test.` Name the model as the CLI's skill gives it. For a second rework round, choose again from the current task spec and the review history.
 
 Each role's instructions are in the plugin's `roles/` folder, with the rules every worker shares in `roles/reporting.md`. The worker reads them itself. Write the task spec for a worker that has those instructions and nothing of this conversation.
 
@@ -72,6 +72,8 @@ Start every run with the plugin's script. Do not call the CLI yourself: its sett
 ```bash
 python3 <plugin>/scripts/worker.py run --cli codex --task .orchestra/<work>/tasks/T01-name.md --role implementer --effort medium
 ```
+
+`--cli` names the CLI of the mode the user turned on: `codex` in Codex mode, `agy` in agy mode. The effort levels each CLI takes are in its skill.
 
 - **What each run carries.** The script reads the brief at every run: its `Worker network:` line, and its `Pre-approved:` keys. It passes the run a guard, a PreToolUse hook of the CLI's own, which refuses what the claude mode's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, a data command that names production, an edit inside `.orchestra/` other than the task's report and `files/` folder, any project edit by a read-only role, and starting a Claude session. It reads the command line, so it is a tripwire, not a sandbox. Change the brief before a run, not during it.
 - A run can take longer than a command in the foreground may. Start it in the background, end your turn, and go on when it reports, as you would wait for a subagent. Do not poll.

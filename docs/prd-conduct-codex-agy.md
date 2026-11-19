@@ -132,7 +132,6 @@ No `gemini` command is on the PATH. The user named the Antigravity CLI, `agy` 1.
 
 - `agy --help` lists a one-shot mode (`-p`), `--model`, `--effort` (`low` to `max`), `--add-dir`, `--sandbox`, `--conversation <id>` to resume, `--output-format json`, `--settings`, `--disable-slash-commands`, and `plugin` and `mcp` subcommands.
 - `agy models` lists `gemini-4-neon`, `gemini-4-argon` and `gemini-4-hydrogen` at several efforts, `gemini-3.8-flash`, and Claude and GPT-OSS models. The effort is part of the model id, as in `gemini-4-neon-high`.
-- Nothing else is known. The checklist below has not been answered for it, and no model has been called through it.
 - The user will use Gemini 4 Neon and Gemini 4 Hydrogen only, not Argon (2026-11-19).
 - **Hooks.** [Antigravity hooks](https://antigravity.google/docs/hooks) are read from a workspace's `.agents/hooks.json`, the global `~/.gemini/config/hooks.json`, and installed agy plugins; hooks in `settings.json` are not loaded, and `--settings` refuses a `hooks` key (`unknown setting "hooks"`). Each of those places is outside the installation boundary, except one layout, which worked: `agy -p` started in a folder of the plugin's own that holds `.agents/hooks.json`, with the project added through `--add-dir`. Its `PreToolUse` hook on `run_command` ran for both commands, let one through and refused the other with `{"decision": "deny", "reason": ...}`, which the worker saw as `tool call denied by pre-tool hook`. No trust prompt appeared.
 - **Hook input** differs from Claude Code's and Codex's: `hookEventName`, `toolCall.name`, `toolCall.args.CommandLine`, `cwd`, `conversationId`, `modelName`, `workspacePaths`, and `lastUserInput`, the whole prompt, so a guard must judge the command and never the prompt text. The first test refused both commands for that reason.
@@ -140,6 +139,9 @@ No `gemini` command is on the PATH. The user named the Antigravity CLI, `agy` 1.
 - **The added project's files.** With the project added through `--add-dir`, agy loaded its `AGENTS.md`, whose rule the worker followed, and its `.agents/hooks.json`, whose hook ran beside the plugin's. A user's own project hooks therefore run in a worker's run too.
 - **File edits reach `PreToolUse`.** The file-writing tool arrived as `write_file` with `Path`, `Content` and `Overwrite`. A matcher of `*` or `.*` catches every tool; `run_command` catches only the shell.
 - **The default sandbox of `-p`.** With no permission flag, `rm -rf` inside the workspace ran without a question, `curl` failed with `Could not resolve host`, and `git commit` failed on `.git/index.lock`. No approval was asked for and nothing waited. After the network failure agy said the command could be run again with `BypassSandbox` set to request the user's permission; a hook can refuse such a call. These runs used a project under `/tmp`; a project elsewhere has not been tried.
+- **Headless approvals** ([headless mode](https://antigravity.google/docs/cli/headless/)). A tool call that needs approval is soft-denied: the run goes on and a notice goes to stderr. A read of a file outside the workspace is one: the first real run could not read its role file in the plugin's folder, and did nothing. `--dangerously-skip-permissions` would approve every call.
+- **The sandbox and its allow rules** ([terminal sandbox](https://antigravity.google/docs/sandbox/)). `--settings` takes `settings.json` keys for one session, such as `permissions.allow`. With the sandbox on, `{"permissions":{"allow":["read_url(*)"]}}` opened the network: `curl` reached two domains with HTTP 200. `read_file(<dir>)` mounts a folder for reading only: in a read-only layout, `cat` of a project file worked and appending to it failed with `Read-only file system`. A folder that is neither in the workspace nor allowed is not visible to commands. These hold for a project outside `/tmp`, under the home folder.
+- **Isolation.** This machine's agy has no plugins and no MCP servers, and no global `GEMINI.md` or `AGENTS.md`. agy ships built-in skills. No per-run switch for user plugins or skills is documented; `--disable-slash-commands` stops skill expansion of a prompt.
 - **Resume.** `agy -p --conversation <id>`, started from the same folder without `--add-dir`, remembered the earlier turn, kept the added project in the workspace (its hook ran and its `AGENTS.md` rule held), and wrote inside it.
 
 ### The vendors' prompting guides
@@ -207,7 +209,8 @@ Three layers, so that agy adds one file:
 - The roles are those of `orchestra-codex`: `engineer`, `analyst`, `implementer`, `writer`. Their files are copied into this plugin under `roles/`, shared by both CLIs, with the reporting rules in `roles/reporting.md`. A worker reads its role file and its task spec by absolute path. The skill's base directory, which Claude Code prints when a skill loads, gives the plugin's path.
 - The models follow the Claude roster's split between judgment and execution, and the efforts are the user's choice of 2026-11-19. `engineer` runs on `gpt-6.2-astra` at `high` by default, `medium` for bounded work, and `xhigh` for interacting causes. `analyst` runs on `gpt-6.2-astra` at `high` by default, `medium` for a bounded survey, and up to `xhigh` or `max` as the investigation demands. `implementer` and `writer` run on `gpt-6.2-sol` at `medium` by default and `high` when the work needs planning, one level above the GPT-6.2 guides' starting point, because the user has Codex usage to spare. Quality comes first in this step.
 - No Haiku workers. The conductor may still make its own `haiku-scout` calls.
-- agy mode follows the same split: `engineer` and `analyst` on Gemini 4 Neon, `implementer` and `writer` on Gemini 4 Hydrogen. Neon defaults to `high`, Google's default; Hydrogen to `medium`, which Google gives for general coding. The first message to a Gemini worker adds the plan, verify and execute loop and the task's test command. To be confirmed when Gemini mode is built.
+- agy mode follows the same split: `engineer` and `analyst` on Gemini 4 Neon, `implementer` and `writer` on Gemini 4 Hydrogen. Neon defaults to `high`, Google's default; Hydrogen to `medium`, which Google gives for general coding. The levels go up to `xhigh`, agy's top, so an analysis that would take `max` on Codex takes `xhigh`.
+- The first message is the same for both CLIs: read the role, then the task spec. Google's plan, verify and execute loop is not added; the roles already ask the worker to check the acceptance criteria before it finishes.
 
 ### Runs
 
@@ -215,6 +218,7 @@ A script, `scripts/worker.py`, makes each run so that the conductor does not ass
 
 - **`run`** takes the task spec, the role, the effort and the CLI. It builds the command with every fact above applied: the model and effort, plugins and MCP servers off, the sandbox, the folders the role may write, the network, the prompt from a file, and stdin closed.
 - **Writable folders by role.** An implementation role gets the project. A read-only role gets only its report path and its `files/` folder. `.git` stays read-only either way.
+- **The agy layout.** An agy run starts in a workspace folder of the plugin's own under the system's temporary folder, one per task, which holds the guard's `.agents/hooks.json`. The folders the role may write are added with `--add-dir`: the project for an implementation role, its `files/` folder and `reports/` for a read-only one. `--settings` passes `permissions.allow`: `read_url(*)` unless the network is blocked, `read_file` of the plugin's `roles/`, and for a read-only role `read_file` of the project. The model id carries the effort. The JSON result gives the session id, the token counts and the worker's last message.
 - **The network** is open unless the brief's `## Constraints` says `Worker network: blocked`, which suits a sensitive repository. The interview asks once, with open as the default. The user chose this on 2026-11-19, together with the guard below.
 - **The guard.** Each run carries `scripts/worker_guard.py` as a `PreToolUse` hook of the CLI itself: for Codex through `-c 'hooks.PreToolUse=[...]'` with `--dangerously-bypass-hook-trust`, for agy through a folder of the plugin's own that holds `.agents/hooks.json` (agy mode, not built yet). It judges each shell command and file edit by the claude mode's rules for a Claude subagent, reusing `guard_main.py`, with the brief's pre-approved keys. The script lists its refusals as `GUARD:` lines. In a real run it refused `claude -p` and let `ls` through, while the worker's own instructions had already kept it from an unapproved `npm install` and an edit to the brief. An implementation role's shell redirects are not judged, as in the claude mode; the check after the run flags what they change under `.orchestra/`.
 - **`resume`** takes a review comment and passes the same settings again with `-c`, because a resume does not keep them.
@@ -235,17 +239,17 @@ The task stops with `BLOCKED` and the conductor tells the user. It does not fall
 
 On 2026-11-19 these are built on the branch, with tests that call no model:
 
-- **Modes and hooks.** One mode per session in `scripts/common.py`. `/orchestra:conduct-codex` sets `codex`. In `codex` and `agy` every guard exits at once, and `require_skill.py` keeps only the Opus effort question. 7 hook tests, 217 in all.
-- **Instructions.** `skills/conduct-codex`, `skills/cli-workers` and `skills/codex`, and the four roles under `roles/`.
-- **Runs.** `scripts/worker.py` with 18 tests against a fake `codex`, and the real runs above.
-- **The worker guard.** `scripts/worker_guard.py` with 11 tests in both the Codex and the agy formats, and one real Codex run in which it refused `claude -p`.
-- **The audit.** `scripts/audit.py` with 8 tests on synthetic transcripts. On this session's own transcript it found the one call a hook refused in the Fable part, and a task spec written before `orchestra:documentation` was loaded.
+- **Modes and hooks.** One mode per session in `scripts/common.py`. `/orchestra:conduct-codex` sets `codex`, and `/orchestra:conduct-agy` sets `agy`. In `codex` and `agy` every guard exits at once, and `require_skill.py` keeps only the Opus effort question. 7 hook tests, 217 in all.
+- **Instructions.** `skills/conduct-codex`, `skills/conduct-agy`, `skills/cli-workers`, `skills/codex` and `skills/agy`, and the four roles under `roles/`.
+- **Runs.** `scripts/worker.py` with 23 tests against a fake `codex` and a fake `agy`, and the real runs above. For agy: an `implementer` run on Hydrogen `low` that passed review (40 s), its resume with an added rule (20 s, the same conversation), and an `analyst` run on Neon `low` that read the project, could not write it, and wrote its own folder (50 s).
+- **The worker guard.** `scripts/worker_guard.py` with 11 tests in both the Codex and the agy formats. In real runs it refused `claude -p` on Codex, and on agy a project write by the read-only role and `claude -p`.
+- **The audit.** `scripts/audit.py` with 9 tests on synthetic transcripts. On this session's own transcript it found the one call a hook refused in the Fable part, and a task spec written before `orchestra:documentation` was loaded.
 
 Not done yet:
 
 - **A whole piece of work in Codex mode,** run by a conductor in a new session with this branch's plugin, followed by the audit.
 - **The README and the development notes,** once that run has shown how the mode behaves.
-- **agy mode,** from the checklist's answers for `agy`.
+- **A whole piece of work in agy mode,** the same way.
 
 ## Answers from the user
 

@@ -43,6 +43,7 @@ TASK_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/tasks/((T\d+)[^/\s`'\"]*\.md)
 REPORT_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reports/(T\d+)[^/\s`'\"]*\.md")
 REVIEW_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reviews/(T\d+)[^/\s`'\"]*\.md")
 WORKER_RUN = re.compile(r"worker\.py\s+(run|resume)\b")
+CLI_ARG = re.compile(r"--cli[=\s]+([A-Za-z0-9_-]+)")
 DIRECT_CLI = re.compile(r"(?:^|[\s;&|(])(?:codex\s+exec|agy\s+(?:-p|--print|--prompt)|gemini\s)")
 WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
 HOOK_REFUSAL = re.compile(r"hook error|\[orchestra\]|denied", re.I)
@@ -241,7 +242,8 @@ class Audit:
             state = self.approval().state
             if state in ("newer", "no-turn"):
                 self.add(when, "A run before the brief was confirmed", "%s (brief %s)" % (task, state), outcome)
-            for skill in ("conductor", "cli-workers", "codex"):
+            cli = CLI_ARG.search(cmd)
+            for skill in ("conductor", "cli-workers", cli.group(1) if cli else self.mode or "codex"):
                 if skill not in self.loaded:
                     self.add(when, "A rule skill was not loaded", "a run started before `orchestra:%s` was loaded" % skill, outcome)
         record = os.path.join(self.unit_path(unit), "files", task, "cli", "run.json")

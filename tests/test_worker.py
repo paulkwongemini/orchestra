@@ -44,6 +44,26 @@ FAKE_CODEX = textwrap.dedent('''\
     sys.exit(plan.get("exit", 0))
 ''')
 
+FAKE_AGY = textwrap.dedent('''\
+    #!/usr/bin/env python3
+    import json, os, sys
+    argv = sys.argv[1:]
+    stdin = sys.stdin.read()
+    with open(os.environ["FAKE_LOG"], "a", encoding="utf-8") as f:
+        f.write(json.dumps({"argv": argv, "cwd": os.getcwd(), "stdin": stdin, "cli": "agy"}) + "\\n")
+    plan = json.load(open(os.environ["FAKE_PLAN"], encoding="utf-8"))
+    project = os.environ["FAKE_PROJECT"]
+    for rel, text in plan.get("write", {}).items():
+        path = os.path.join(project, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w", encoding="utf-8").write(text)
+    print(json.dumps({"conversation_id": plan.get("session", "conv-1"), "status": plan.get("status", "SUCCESS"),
+                      "response": plan.get("last", ""), "num_turns": 1, "duration_seconds": 1.0,
+                      "usage": {"input_tokens": 15684, "output_tokens": 639, "thinking_tokens": 215,
+                                "cache_read_tokens": 18349, "total_tokens": 16323}}))
+    sys.exit(plan.get("exit", 0))
+''')
+
 TASK = """## Goal
 Send the user back to the login screen when the session expires.
 
@@ -78,10 +98,11 @@ class WorkerTest(unittest.TestCase):
         self.codex_home = os.path.join(self.tmp, "codex-home")
         for d in (self.proj, self.bin, self.codex_home):
             os.makedirs(d)
-        fake = os.path.join(self.bin, "codex")
-        with open(fake, "w", encoding="utf-8") as f:
-            f.write(FAKE_CODEX)
-        os.chmod(fake, 0o755)
+        for name, text in (("codex", FAKE_CODEX), ("agy", FAKE_AGY)):
+            fake = os.path.join(self.bin, name)
+            with open(fake, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.chmod(fake, 0o755)
         with open(os.path.join(self.codex_home, "config.toml"), "w", encoding="utf-8") as f:
             f.write('model = "gpt-6.2-astra"\n[mcp_servers.node_repl]\ncommand = "x"\n[mcp_servers."my.server"]\ncommand = "y"\n')
         self.log = os.path.join(self.tmp, "calls.jsonl")
@@ -314,7 +335,7 @@ class WorkerTest(unittest.TestCase):
         cases = [
             (("run", "--cli", "codex", "--task", self.spec, "--role", "tester"), "Unknown role"),
             (("run", "--cli", "codex", "--task", self.spec, "--role", "engineer", "--effort", "huge"), "Unknown effort"),
-            (("run", "--cli", "agy", "--task", self.spec, "--role", "engineer"), "not supported yet"),
+            (("run", "--cli", "agy", "--task", self.spec, "--role", "engineer", "--effort", "max"), "Unknown effort `max` for agy"),
             (("run", "--cli", "other", "--task", self.spec, "--role", "engineer"), "Unknown CLI"),
             (("run", "--cli", "codex", "--task", os.path.join(self.proj, "src/login.py"), "--role", "engineer"), "is not a task spec"),
         ]
@@ -322,10 +343,80 @@ class WorkerTest(unittest.TestCase):
             code, out = self.worker(*args)
             self.assertEqual(code, 1, args)
             self.assertIn(text, out, args)
-        code, out = self.worker("run", "--cli", "codex", "--task", self.spec, "--role", "engineer", path=self.tmp)
-        self.assertEqual(code, 1)
-        self.assertIn("is not on the PATH", out)
+        for cli in ("codex", "agy"):
+            code, out = self.worker("run", "--cli", cli, "--task", self.spec, "--role", "engineer", path=self.tmp)
+            self.assertEqual(code, 1, cli)
+            self.assertIn("`%s` is not on the PATH" % cli, out)
         self.assertFalse(os.path.exists(self.log))
+
+    # ---- agy
+
+    def agy_settings(self, argv):
+        return json.loads(self.option(argv, "--settings")[0])
+
+    def test_an_agy_implementation_run(self):
+        code, out = self.worker("run", "--cli", "agy", "--task", self.spec, "--role", "implementer")
+        self.assertEqual(code, 0, out)
+        call = self.calls()[0]
+        argv = call["argv"]
+        self.assertEqual(argv[0], "-p")
+        for text in (os.path.join(ROOT, "roles", "implementer.md"), os.path.realpath(self.spec), UNIT + "/reports/T01.md"):
+            self.assertIn(text, argv[1])
+        self.assertEqual(call["stdin"], "")
+        self.assertEqual(self.option(argv, "--model"), ["gemini-4-hydrogen-medium"])
+        self.assertEqual(self.option(argv, "--output-format"), ["json"])
+        self.assertIn("--disable-slash-commands", argv)
+        self.assertEqual(self.option(argv, "--add-dir"), [os.path.realpath(self.proj)])
+        self.assertEqual(self.agy_settings(argv), {"permissions": {"allow": ["read_url(*)", "read_file(%s)" % os.path.join(ROOT, "roles")]}})
+        workspace = call["cwd"]
+        self.assertFalse(workspace.startswith(os.path.realpath(self.proj)))
+        with open(os.path.join(workspace, ".agents", "hooks.json"), encoding="utf-8") as f:
+            hooks = json.load(f)
+        handler = hooks["orchestra-guard"]["PreToolUse"][0]
+        self.assertEqual(handler["matcher"], "*")
+        self.assertIn("worker_guard.py", handler["hooks"][0]["command"])
+        self.assertIn(os.path.join(self.proj, UNIT, "files", "T01", "cli", "guard.json"), handler["hooks"][0]["command"])
+        self.assertIn("TASK T01 | agy gemini-4-hydrogen medium |", out)
+        self.assertIn("SESSION: conv-1", out)
+        self.assertIn("STATUS: DONE", out)
+        self.assertIn("tokens in 15,684 (cached 18,349), out 854", out)
+        with open(os.path.join(self.proj, UNIT, "files", "T01", "cli", "last-message-1.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), LAST_DONE)
+
+    def test_an_agy_analyst_reads_the_project_and_writes_only_its_folders(self):
+        self.plan({"write": {UNIT + "/reports/T01.md": REPORT_DONE}, "last": LAST_DONE})
+        code, out = self.worker("run", "--cli", "agy", "--task", self.spec, "--role", "analyst", "--effort", "xhigh")
+        self.assertEqual(code, 0, out)
+        argv = self.calls()[0]["argv"]
+        self.assertEqual(self.option(argv, "--model"), ["gemini-4-neon-xhigh"])
+        unit = os.path.realpath(os.path.join(self.proj, UNIT))
+        self.assertEqual(self.option(argv, "--add-dir"), [os.path.join(unit, "files", "T01"), os.path.join(unit, "reports")])
+        self.assertEqual(self.agy_settings(argv)["permissions"]["allow"],
+                         ["read_url(*)", "read_file(%s)" % os.path.join(ROOT, "roles"), "read_file(%s)" % os.path.realpath(self.proj)])
+
+    def test_agy_with_the_network_blocked(self):
+        self.write(UNIT + "/brief.md", "## Constraints\nWorker network: blocked\n")
+        self.worker("run", "--cli", "agy", "--task", self.spec, "--role", "implementer")
+        self.assertEqual(self.agy_settings(self.calls()[0]["argv"]), {"permissions": {"allow": ["read_file(%s)" % os.path.join(ROOT, "roles")]}})
+
+    def test_an_agy_resume(self):
+        self.worker("run", "--cli", "agy", "--task", self.spec, "--role", "engineer")
+        message = self.write(UNIT + "/files/T01/rework-1.md", "Fix the expired-token case.\n")
+        code, out = self.worker("resume", "--task", self.spec, "--message", message)
+        self.assertEqual(code, 0, out)
+        first, second = self.calls()
+        self.assertEqual(second["argv"][:2], ["-p", "Fix the expired-token case."])
+        self.assertEqual(self.option(second["argv"], "--conversation"), ["conv-1"])
+        for opt in ("--model", "--add-dir", "--settings"):
+            self.assertEqual(self.option(second["argv"], opt), self.option(first["argv"], opt), opt)
+        self.assertEqual(second["cwd"], first["cwd"])
+
+    def test_an_agy_run_that_fails(self):
+        self.plan({"status": "ERROR", "last": "", "exit": 1})
+        code, out = self.worker("run", "--cli", "agy", "--task", self.spec, "--role", "implementer")
+        self.assertEqual(code, 1, out)
+        with open(os.path.join(self.proj, UNIT, "files", "T01", "cli", "last-message-1.md"), encoding="utf-8") as f:
+            self.assertIn("agy status: ERROR", f.read())
 
     def test_a_report_path_outside_the_work_folder_is_refused(self):
         self.write(UNIT + "/tasks/T02-x.md", TASK.replace(UNIT + "/reports/T01.md", "src/report.md"))

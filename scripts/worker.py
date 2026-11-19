@@ -27,6 +27,7 @@ Exit codes: 0 the run finished and nothing was flagged, 2 the run finished with 
 1 the run did not finish or could not start.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -118,11 +120,22 @@ class Codex:
                  "--dangerously-bypass-hook-trust"]
         return args
 
-    def run_command(self, s, last_message):
-        return [self.binary, "exec"] + self.settings(s) + ["-C", s["cwd"], "-o", last_message, "-"]
+    def prepare(self, s, paths):
+        """Where the run works and what it may write, by the role's kind."""
+        if s["kind"] == "impl":
+            s["cwd"], s["writable_roots"] = paths["project"], []
+        else:
+            s["cwd"], s["writable_roots"] = paths["files"], [os.path.dirname(paths["report"])]
+
+    def run_command(self, s, last_message, prompt):
+        """The command and its stdin. The prompt goes in on stdin, so the CLI does not wait for more."""
+        return [self.binary, "exec"] + self.settings(s) + ["-C", s["cwd"], "-o", last_message, "-"], prompt.encode("utf-8")
 
     def resume_command(self, s, last_message, message):
-        return [self.binary, "exec", "resume", s["session_id"]] + self.settings(s) + ["-o", last_message, message]
+        return [self.binary, "exec", "resume", s["session_id"]] + self.settings(s) + ["-o", last_message, message], b""
+
+    def after_run(self, events, last_message):
+        """Codex writes the last message itself, with -o."""
 
     def read_events(self, path):
         """(session id, token usage) from the JSON event stream."""
@@ -146,8 +159,82 @@ class Codex:
 
 
 class Agy:
-    """The Antigravity CLI, which runs Gemini models. agy mode is specified in docs/prd-conduct-codex-agy.md and not built yet."""
+    """The Antigravity CLI, which runs Gemini models.
+
+    agy reads hooks only from a workspace's `.agents/hooks.json`, the user's global hooks and agy
+    plugins, and `--settings` refuses a `hooks` key. So each task gets a workspace folder of the
+    plugin's own, outside the project, which holds the guard's `.agents/hooks.json`; the run
+    starts there, and the folders the task may write are added with `--add-dir`. The sandbox stays
+    on. `permissions.allow` opens the network with `read_url(*)`, and for a read-only role mounts
+    the project for reading with `read_file(<project>)`.
+    """
     name = "agy"
+    binary = "agy"
+    efforts = ("low", "medium", "high", "xhigh")
+    families = {"engineer": "neon", "analyst": "neon", "implementer": "hydrogen", "writer": "hydrogen"}
+    models = {role: "gemini-4-%s" % family for role, family in families.items()}
+    # Google gives HIGH as the default and MEDIUM for general coding. `xhigh` is agy's top level.
+    default_effort = {"engineer": "high", "analyst": "high", "implementer": "medium", "writer": "medium"}
+
+    def model_id(self, s):
+        return "%s-%s" % (s["model"], s["effort"])  # agy names the effort in the model id
+
+    def prepare(self, s, paths):
+        digest = hashlib.sha1(paths["unit"].encode("utf-8")).hexdigest()[:12]
+        workspace = os.path.join(tempfile.gettempdir(), "orchestra-agy", digest, paths["task"])
+        os.makedirs(os.path.join(workspace, ".agents"), exist_ok=True)
+        guard = "%s %s %s" % (shlex.quote(sys.executable), shlex.quote(GUARD), shlex.quote(s["guard_context"]))
+        with open(os.path.join(workspace, ".agents", "hooks.json"), "w", encoding="utf-8") as f:
+            json.dump({"orchestra-guard": {"PreToolUse": [{"matcher": "*", "hooks": [
+                {"type": "command", "command": guard, "timeout": 15}]}]}}, f, indent=2)
+        s["cwd"] = workspace
+        if s["kind"] == "impl":
+            s["add_dirs"], s["read_dirs"] = [paths["project"]], []
+        else:
+            s["add_dirs"], s["read_dirs"] = [paths["files"], os.path.dirname(paths["report"])], [paths["project"]]
+        s["writable_roots"] = s["add_dirs"]
+
+    def settings(self, s):
+        allow = ["read_url(*)"] if s["network"] else []
+        # The role files live in the plugin, outside the workspace. Without this rule the worker
+        # cannot read them: headless mode refuses a read_file it cannot ask about.
+        allow += ["read_file(%s)" % d for d in [ROLES_DIR] + list(s.get("read_dirs") or [])]
+        args = ["--model", self.model_id(s), "--output-format", "json", "--disable-slash-commands",
+                "--settings", json.dumps({"permissions": {"allow": allow}})]
+        for d in s.get("add_dirs") or []:
+            args += ["--add-dir", d]
+        return args
+
+    def run_command(self, s, last_message, prompt):
+        return [self.binary, "-p", prompt] + self.settings(s), b""
+
+    def resume_command(self, s, last_message, message):
+        return [self.binary, "-p", message, "--conversation", s["session_id"]] + self.settings(s), b""
+
+    def _result(self, path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def read_events(self, path):
+        data = self._result(path)
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
+        if usage:
+            usage = {"input_tokens": usage.get("input_tokens", 0), "cached_input_tokens": usage.get("cache_read_tokens", 0),
+                     "output_tokens": usage.get("output_tokens", 0) + usage.get("thinking_tokens", 0)}
+        return (str(data["conversation_id"]) if data.get("conversation_id") else None), usage
+
+    def after_run(self, events, last_message):
+        """agy prints one JSON object. Its `response` is the worker's last message."""
+        data = self._result(events)
+        text = data.get("response") or ""
+        if data.get("status") and data.get("status") != "SUCCESS":
+            text += "\n\n(agy status: %s%s)" % (data.get("status"), ": " + str(data.get("error")) if data.get("error") else "")
+        with open(last_message, "w", encoding="utf-8") as f:
+            f.write(text)
 
 
 CLIS = {"codex": Codex, "agy": Agy}
@@ -343,12 +430,25 @@ def save(path, s):
         json.dump(s, f, indent=2)
 
 
+def write_guard_context(s, paths):
+    """The guard's view of the run. Written before each run, so a key the user approved meanwhile counts."""
+    with open(s["guard_context"], "w", encoding="utf-8") as f:
+        json.dump({"kind": s["kind"], "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
+                   "keys": s["keys"], "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
+
+
+def finish(cli, s, paths, code, elapsed, events, errors, changes, git_changed):
+    cli.after_run(events, paths["last_message"])
+    lines, warned = report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_changed)
+    save(os.path.join(paths["record"], "run.json"), s)
+    print("\n".join(lines))
+    return 1 if code != 0 else (2 if warned else 0)
+
+
 def cmd_run(args):
     if args.cli not in CLIS:
         raise Fail("Unknown CLI `%s`. Known: %s" % (args.cli, ", ".join(CLIS)))
     cli = CLIS[args.cli]()
-    if not isinstance(cli, Codex):
-        raise Fail("The %s CLI is not supported yet. See docs/prd-conduct-codex-agy.md." % args.cli)
     if args.role not in ROLES:
         raise Fail("Unknown role `%s`. Roles: %s" % (args.role, ", ".join(ROLES)))
     effort = args.effort or cli.default_effort[args.role]
@@ -359,27 +459,16 @@ def cmd_run(args):
     paths = locate(args.task)
     os.makedirs(paths["record"], exist_ok=True)
     os.makedirs(os.path.dirname(paths["report"]), exist_ok=True)
-    kind = ROLES[args.role]["kind"]
-    if kind == "impl":
-        cwd, roots = paths["project"], []
-    else:
-        cwd, roots = paths["files"], [os.path.dirname(paths["report"])]
     keys, network = brief_settings(paths["unit"])
-    context = os.path.join(paths["record"], "guard.json")
-    with open(context, "w", encoding="utf-8") as f:
-        json.dump({"kind": kind, "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
-                   "keys": keys, "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
-    s = {"cli": cli.name, "role": args.role, "kind": kind, "model": cli.models[args.role], "effort": effort,
-         "network": network, "keys": keys, "cwd": cwd, "writable_roots": roots, "guard_context": context,
-         "session_id": None, "rounds": 1}
+    s = {"cli": cli.name, "role": args.role, "kind": ROLES[args.role]["kind"], "model": cli.models[args.role],
+         "effort": effort, "network": network, "keys": keys,
+         "guard_context": os.path.join(paths["record"], "guard.json"), "session_id": None, "rounds": 1}
+    write_guard_context(s, paths)
+    cli.prepare(s, paths)
     paths["last_message"] = os.path.join(paths["record"], "last-message-1.md")
     prompt = PROMPT.format(role=os.path.join(ROLES_DIR, args.role + ".md"), spec=paths["spec"], report=paths["report"])
-    cmd = cli.run_command(s, paths["last_message"])
-    code, elapsed, events, errors, changes, git_changed = execute(cli, cmd, cwd, prompt.encode("utf-8"), paths, 1)
-    lines, warned = report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_changed)
-    save(os.path.join(paths["record"], "run.json"), s)
-    print("\n".join(lines))
-    return 1 if code != 0 else (2 if warned else 0)
+    cmd, stdin = cli.run_command(s, paths["last_message"], prompt)
+    return finish(cli, s, paths, *execute(cli, cmd, s["cwd"], stdin, paths, 1))
 
 
 def cmd_resume(args):
@@ -397,19 +486,13 @@ def cmd_resume(args):
     cli = CLIS[s["cli"]]()
     # The brief may have changed since the first run, for example with a key the user approved.
     s["keys"], s["network"] = brief_settings(paths["unit"])
-    context = s.get("guard_context") or os.path.join(paths["record"], "guard.json")
-    s["guard_context"] = context
-    with open(context, "w", encoding="utf-8") as f:
-        json.dump({"kind": s["kind"], "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
-                   "keys": s["keys"], "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
+    s["guard_context"] = s.get("guard_context") or os.path.join(paths["record"], "guard.json")
+    write_guard_context(s, paths)
+    cli.prepare(s, paths)
     s["rounds"] = int(s.get("rounds", 1)) + 1
     paths["last_message"] = os.path.join(paths["record"], "last-message-%d.md" % s["rounds"])
-    cmd = cli.resume_command(s, paths["last_message"], message)
-    code, elapsed, events, errors, changes, git_changed = execute(cli, cmd, s["cwd"], b"", paths, s["rounds"])
-    lines, warned = report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_changed)
-    save(os.path.join(paths["record"], "run.json"), s)
-    print("\n".join(lines))
-    return 1 if code != 0 else (2 if warned else 0)
+    cmd, stdin = cli.resume_command(s, paths["last_message"], message)
+    return finish(cli, s, paths, *execute(cli, cmd, s["cwd"], stdin, paths, s["rounds"]))
 
 
 def main(argv=None):
