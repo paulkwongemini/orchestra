@@ -35,10 +35,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as c  # noqa: E402
 import guard_main as gm  # noqa: E402
 
-MODE_COMMAND = re.compile(r"(?:^\s*|<command-name>\s*)/%s:(conduct-codex|conduct-agy|conductor|conduct|enable|disable)(?=\s|<|$)" % c.PLUGIN)
-COMMAND_MODES = {"conduct": "claude", "enable": "claude", "conductor": "claude",
-                 "conduct-codex": "codex", "conduct-agy": "agy", "disable": None}
-UNIT_IN_PATH = re.compile(r"\.orchestra/([^/\s`'\"]+)/")
+# Longest names first, so that `conduct` does not match the start of `conduct-codex` or `conductor`.
+MODE_COMMAND = re.compile(r"(?:^\s*|<command-name>\s*)/%s:(%s)(?=\s|<|$)" % (
+    c.PLUGIN, "|".join(sorted(map(re.escape, tuple(c.COMMAND_MODES) + (c.OFF_COMMAND,)), key=len, reverse=True))))
+WORK_FOLDER_IN_PATH = re.compile(r"\.orchestra/([^/\s`'\"]+)/")
 TASK_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/tasks/((T\d+)[^/\s`'\"]*\.md)")
 REPORT_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reports/(T\d+)[^/\s`'\"]*\.md")
 REVIEW_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reviews/(T\d+)[^/\s`'\"]*\.md")
@@ -47,13 +47,6 @@ CLI_ARG = re.compile(r"--cli[=\s]+([A-Za-z0-9_-]+)")
 DIRECT_CLI = re.compile(r"(?:^|[\s;&|(])(?:codex\s+exec|agy\s+(?:-p|--print|--prompt)|gemini\s)")
 WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
 HOOK_REFUSAL = re.compile(r"hook error|\[orchestra\]|denied", re.I)
-
-
-def epoch(text):
-    try:
-        return datetime.datetime.fromisoformat(str(text).replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
 
 
 def load(path):
@@ -86,41 +79,30 @@ class Audit:
         self.data = {"cwd": self.project, "session_id": "audit"}
         self.mode = mode
         self.last_turn = None
-        self.brief_written = {}     # unit -> when the conductor last wrote its brief
-        self.reviews = {}           # (unit, task) -> when the review record was first written
+        self.brief_written = {}     # work_folder -> when the conductor last wrote its brief
+        self.reviews = {}           # (work_folder, task) -> when the review record was first written
         self.active = None          # the work folder the conductor last touched
         self.loaded = set()
-        self.analysts = set()       # (unit, task) delegated to an analyst, whose report is read at once
+        self.analysts = set()       # (work_folder, task) delegated to an analyst, whose report is read at once
         self.findings = []
         self.calls = 0
 
     # ---- state
 
-    def unit_path(self, name):
-        return os.path.join(self.project, c.WORKDIR, name)
+    def work_folder_path(self, name):
+        return os.path.join(self.project, c.ORCHESTRA_DIR, name)
 
     def approval(self):
         """The brief's approval as the hooks would have seen it at this moment."""
         if self.active is None:
-            return gm.Approval(None, set(), "no-work")
-        brief = os.path.join(self.unit_path(self.active), "brief.md")
-        if not os.path.isfile(brief):
-            return gm.Approval(self.unit_path(self.active), set(), "no-brief")
-        text = c.read_text(brief)
-        listed = c.preapproved_keys(text)
-        files = frozenset(c.conductor_write_files(text, self.data))
-        written = self.brief_written.get(self.active)
-        if self.last_turn is None:
-            state = "no-turn"
-        elif written is not None and written > self.last_turn:
-            state = "newer"
-        else:
-            state = "confirmed"
-        return gm.Approval(self.unit_path(self.active), listed, state, files)
+            return c.read_approval(None, self.data, self.last_turn)
+        # A brief the transcript never saw written is taken as older than the user's last turn.
+        return c.read_approval(self.work_folder_path(self.active), self.data, self.last_turn,
+                               changed=self.brief_written.get(self.active, 0))
 
     def touch(self, text):
-        m = UNIT_IN_PATH.search(text or "")
-        if m and os.path.isdir(self.unit_path(m.group(1))):
+        m = WORK_FOLDER_IN_PATH.search(text or "")
+        if m and os.path.isdir(self.work_folder_path(m.group(1))):
             self.active = m.group(1)
 
     def add(self, when, rule, detail, outcome):
@@ -179,14 +161,14 @@ class Audit:
         m = REPORT_FILE.search(target)
         if not m:
             return
-        unit, task = m.group(1), m.group(2)
-        report = os.path.join(self.unit_path(unit), "reports", task + ".md")
-        if c.read_status(report) in ("BLOCKED", "FAILED") or (unit, task) in self.analysts:
+        work_folder, task = m.group(1), m.group(2)
+        report = os.path.join(self.work_folder_path(work_folder), "reports", task + ".md")
+        if c.read_status(report) in ("BLOCKED", "FAILED") or (work_folder, task) in self.analysts:
             return
-        if (unit, task) in self.reviews and self.reviews[(unit, task)] <= when:
+        if (work_folder, task) in self.reviews and self.reviews[(work_folder, task)] <= when:
             return
-        review = os.path.join(self.unit_path(unit), "reviews", task + ".md")
-        if (unit, task) not in self.reviews and os.path.isfile(review) and self.started and os.path.getmtime(review) < self.started:
+        review = os.path.join(self.work_folder_path(work_folder), "reviews", task + ".md")
+        if (work_folder, task) not in self.reviews and os.path.isfile(review) and self.started and os.path.getmtime(review) < self.started:
             return  # reviewed before this session began
         self.add(when, "A report was read before its review record", os.path.relpath(report, self.project), outcome)
 
@@ -203,15 +185,8 @@ class Audit:
         if worker:
             return  # the run itself writes files through the CLI, which the shell rules do not judge
 
-        approval = self.approval()
-
-        class AuditCtx(gm.Ctx):
-            @property
-            def approval(self_inner):
-                return approval
-
         try:
-            result = gm.judge_command(cmd, AuditCtx(self.data, "conductor", cmd))
+            result = gm.judge_command(cmd, gm.Ctx(self.data, "conductor", cmd, self.approval()))
         except Exception as e:  # a fault in the guard is not a finding
             result = None
             sys.stderr.write("audit: could not judge %r: %s\n" % (cmd[:80], e))
@@ -229,9 +204,9 @@ class Audit:
         if not m:
             self.add(when, "A run without a task spec", cmd[:160], outcome)
             return
-        unit, spec_name, task = m.group(1), m.group(2), m.group(3)
-        self.active = unit
-        spec = os.path.join(self.unit_path(unit), "tasks", spec_name)
+        work_folder, spec_name, task = m.group(1), m.group(2), m.group(3)
+        self.active = work_folder
+        spec = os.path.join(self.work_folder_path(work_folder), "tasks", spec_name)
         if not os.path.isfile(spec):
             self.add(when, "A run without a task spec", spec_name, outcome)
         else:
@@ -246,18 +221,18 @@ class Audit:
             for skill in ("conductor", "cli-workers", cli.group(1) if cli else self.mode or "codex"):
                 if skill not in self.loaded:
                     self.add(when, "A rule skill was not loaded", "a run started before `orchestra:%s` was loaded" % skill, outcome)
-        record = os.path.join(self.unit_path(unit), "files", task, "cli", "run.json")
+        record = os.path.join(self.work_folder_path(work_folder), "files", task, "cli", "run.json")
         try:
             with open(record, encoding="utf-8") as f:
                 if json.load(f).get("kind") == "readonly":
-                    self.analysts.add((unit, task))
+                    self.analysts.add((work_folder, task))
         except (OSError, ValueError):
             pass
 
     # ---- the whole transcript
 
     def run(self, rows):
-        times = [epoch(r.get("timestamp")) for r in rows if r.get("timestamp")]
+        times = [c.epoch(r.get("timestamp")) for r in rows if r.get("timestamp")]
         self.started = min(t for t in times if t) if any(times) else None
         results = {}
         for r in rows:
@@ -268,13 +243,13 @@ class Audit:
                         results[item.get("tool_use_id")] = item
         asked = set()
         for r in rows:
-            when = epoch(r.get("timestamp")) or 0
+            when = c.epoch(r.get("timestamp")) or 0
             text = human_text(r)
             if text is not None:
                 self.last_turn = when
                 m = MODE_COMMAND.search(text)
                 if m:
-                    self.mode = COMMAND_MODES[m.group(1)]
+                    self.mode = c.COMMAND_MODES.get(m.group(1))
                 continue
             if r.get("type") == "user":
                 for item in (r.get("message") or {}).get("content") or []:

@@ -1,4 +1,5 @@
 ---
+name: conduct
 description: Turns conductor mode on for this chat. The conductor designs the work, delegates it to subagents, and reviews the results. It applies while the model is Fable or Opus. /orchestra:disable turns it off.
 disable-model-invocation: true
 ---

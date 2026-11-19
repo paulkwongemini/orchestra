@@ -13,7 +13,7 @@ Principle 8  The conductor does not implement.
     files under `.orchestra/<work>/files/`.
   - Implementation subagents: inside `.orchestra/`, write only their own report and working
     files under `.orchestra/<work>/files/`.
-  - `haiku-editor` (role `editor`): writes anywhere an implementation subagent may, except
+  - `haiku-editor` (actor `editor`): writes anywhere an implementation subagent may, except
     that it writes nothing inside `.orchestra/`, from the shell either.
   - The main conversation of a session on any other model is left alone.
 Principle 3  Commands that change data, dependencies, repository state, or external
@@ -33,22 +33,24 @@ Principle 3  Commands that change data, dependencies, repository state, or exter
   A command the harness cannot read is refused for the conductor and read-only subagents.
   A fault in the guard goes to the user for confirmation, except for implementation subagents
   and `haiku-editor`.
-Principles 5 and 6  No role starts a new session with the claude CLI.
+Principles 5 and 6  No actor starts a new session with the claude CLI.
 
 The shell check is a tripwire for the common paths. It is not a sandbox.
 """
 import os
 import re
-import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as c  # noqa: E402
+from shell_parse import (  # noqa: E402
+    VALUE_OPTS, WRAPPERS, Seg, build_segments, read_line, split_lines, strip_heredocs, unwrap,
+)
 
 WHY = {
     "conductor": (
         "Conductor mode is on in this session, so you are the conductor, and the conductor does not "
-        "implement (Principle 8). Write a task spec and delegate this change to a subagent. You can "
+        "implement. Write a task spec and delegate this change to a subagent. You can "
         "write the brief, task specs, review records, and the decision log inside `.orchestra/` "
         "directly with the Write tool. If you have not loaded your instructions yet, invoke the "
         "`orchestra:conductor` skill first."
@@ -62,42 +64,22 @@ WHY = {
         "review records there belong to others."
     ),
 }
-# Roles whose shell commands get only the category rules, apart from the `editor` role's
+# Actors whose shell commands get only the category rules, apart from the `editor` actor's
 # writes into `.orchestra/`.
 IMPL_LIKE = ("impl", "editor")
-ASK_GIT = "This git command changes repository state, so the user has to confirm it (Principle 3)."
-ASK_OUT = "This command reaches outside this machine or is hard to undo, so the user has to confirm it (Principle 3)."
-ASK_DATA = "This command looks like it changes data or a schema, so the user has to confirm it (Principle 3)."
+ASK_GIT = "This git command changes repository state, so the user has to confirm it."
+ASK_OUT = "This command reaches outside this machine or is hard to undo, so the user has to confirm it."
+ASK_DATA = "This command looks like it changes data or a schema, so the user has to confirm it."
 DENY_PARSE = (
     "The harness could not read this command, so it cannot tell whether it is safe. Run it again "
     "as simpler, separate commands."
 )
 DENY_CLAUDE = (
-    "Starting a new session with the claude CLI is not allowed (Principles 5 and 6). Delegate "
+    "Starting a new session with the claude CLI is not allowed. Delegate "
     "only through the Agent tool and the roster subagents."
 )
 
 DEV_OK = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
-KEYWORDS = {
-    "if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "case", "esac",
-    "{", "}", "!", "function", "select", "in", "time",
-}
-WRAPPERS = {
-    "sudo", "doas", "env", "command", "builtin", "exec", "nice", "ionice", "nohup", "stdbuf",
-    "unbuffer", "timeout", "xargs", "setsid",
-}
-VALUE_OPTS = {
-    "sudo": {"-u", "-g", "-C", "-p", "-h", "-U", "-r", "-t"},
-    "doas": {"-u", "-C"},
-    "env": {"-u", "-C", "-S"},
-    "nice": {"-n"},
-    "ionice": {"-c", "-n", "-p"},
-    "timeout": {"-s", "-k", "--signal", "--kill-after"},
-    "xargs": {
-        "-I", "-n", "-P", "-L", "-d", "-s", "-E", "-a",
-        "--max-args", "--max-procs", "--delimiter", "--replace", "--arg-file",
-    },
-}
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "fish"}
 EDITORS = {"ed", "ex", "vi", "vim", "nvim", "nano", "pico", "emacs"}
 MUTATE_ALL = {"rm", "rmdir", "unlink", "shred", "touch", "truncate", "chmod", "chown", "chgrp", "mv"}
@@ -241,7 +223,7 @@ CURL_ELSEWHERE = {
 _URL = re.compile(r"^(?:([A-Za-z][A-Za-z0-9+.\-]*)://)?(?:[^@/?#]*@)?(\[[^\]/?#]*\]|[^:/?#]*)(?::\d*)?(?:[/?#].*)?$", re.S)
 
 
-# ---------------------------------------------------------------- where each role may write
+# ---------------------------------------------------------------- who may write where
 
 def _home_claude():
     return os.path.realpath(os.path.expanduser("~/.claude"))
@@ -254,10 +236,10 @@ def conductor_may_write(path, data, approval=None):
     if c.inside(path, os.path.join(home, "projects")) and "/memory/" in path + "/":
         return True
     if c.inside(path, c.project_dir(data)):
-        if c.inside(path, c.work_dir(data)):
+        if c.inside(path, c.orchestra_dir(data)):
             return not c.in_reports(path, data)
         if approval is None:
-            approval = brief_approval(data)
+            approval = c.brief_approval(data)
         return path in approval.files
     return any(c.inside(path, root) for root in c.temp_roots(data))
 
@@ -269,90 +251,45 @@ def readonly_may_write(path, data):
 
 
 def impl_may_write(path, data):
-    if c.inside(path, c.work_dir(data)):
+    if c.inside(path, c.orchestra_dir(data)):
         return c.in_reports(path, data) or c.in_files(path, data)
     return True
 
 
 def editor_may_write(path, data):
-    return not c.inside(path, c.work_dir(data))
-
-
-class Approval:
-    """What the brief in the session's active work folder pre-approves, and which project files
-    it lets the conductor write.
-
-    state: `no-work` (no active work folder), `no-brief`, `no-turn` (no user turn recorded),
-    `newer` (the brief changed after the user last spoke), or `confirmed`.
-    """
-
-    def __init__(self, unit, listed, state, listed_files=frozenset()):
-        self.unit = unit
-        self.listed = listed
-        self.state = state
-        self.keys = listed if state == "confirmed" else set()
-        self.listed_files = listed_files
-        self.files = listed_files if state == "confirmed" else frozenset()
-
-    @property
-    def shown(self):
-        return "`.orchestra/%s/brief.md`" % os.path.basename(self.unit) if self.unit else "`.orchestra/<work>/brief.md`"
-
-
-def brief_approval(data):
-    unit = c.active_work(data)
-    if unit is None:
-        return Approval(None, set(), "no-work")
-    brief = os.path.join(unit, "brief.md")
-    if not os.path.isfile(brief):
-        return Approval(unit, set(), "no-brief")
-    text = c.read_text(brief)
-    listed = c.preapproved_keys(text)
-    files = frozenset(c.conductor_write_files(text, data))
-    # Read the time after the text, so a change in between counts as unconfirmed.
-    try:
-        changed = os.path.getmtime(brief)
-    except OSError:
-        return Approval(unit, set(), "no-brief")
-    turn = c.last_user_turn(data)
-    # Stricter than check_brief in guard_agent.py, which lets a brief through when no user turn
-    # is recorded. A pre-approved action runs with nobody present to confirm it, so it must not
-    # be approved because a record is missing.
-    if turn is None:
-        return Approval(unit, listed, "no-turn", files)
-    if changed > turn:
-        return Approval(unit, listed, "newer", files)
-    return Approval(unit, listed, "confirmed", files)
+    return not c.inside(path, c.orchestra_dir(data))
 
 
 class Ctx:
-    def __init__(self, data, role, command=""):
+    def __init__(self, data, actor, command="", approval=None):
+        """`approval` is the brief's approval when the caller already has it. By default it is
+        read from the session's active work folder when a rule first needs it."""
         self.data = data
-        self.role = role
+        self.actor = actor
         self.command = command
-        self._approval = None
+        self._approval = approval
 
     @property
     def approval(self):
         if self._approval is None:
-            self._approval = brief_approval(self.data)
+            self._approval = c.brief_approval(self.data)
         return self._approval
 
     def category(self, key, production=False):
-        """The verdict on a command of one pre-approval category, for this role."""
+        """The verdict on a command of one pre-approval category, for this actor."""
         kind = "This command %s, which the pre-approval key `%s` covers" % (KINDS[key], key)
         text_only = " " + DATA_TEXT_ONLY if key == "data" else ""
-        if self.role == "editor":
+        if self.actor == "editor":
             return ("deny", "This subagent makes mechanical edits only, and does not run a command that "
                             "%s, whatever the brief pre-approves. The refused command: `%s`. Do not look "
                             "for another way to run it. Stop and report `STATUS: FAILED`."
                             % (KINDS[key], self.command.strip()))
-        if self.role == "readonly":
+        if self.actor == "readonly":
             return ("deny", "This subagent is read-only, and a read-only subagent does not run a command "
                             "that %s. Put the command in your report as a recommendation.%s"
                             % (KINDS[key], text_only))
         if production:
-            if self.role == "conductor":
+            if self.actor == "conductor":
                 return ("ask", ASK_DATA + " It names a production environment, which the `data` key "
                                           "does not cover.")
             return ("deny", "This command %s and names a production environment, which no pre-approval "
@@ -361,7 +298,7 @@ class Ctx:
                             % (KINDS[key], text_only))
         if key in self.approval.keys:
             return None
-        if self.role == "impl":
+        if self.actor == "impl":
             if key == "git":
                 return ("deny", "%s. The work's brief does not pre-approve it. %s Report `BLOCKED` only "
                                 "when the task needs the git command itself, with the command and why "
@@ -371,7 +308,7 @@ class Ctx:
                             "to run %s. Report `BLOCKED` with the command and why the task needs it."
                             % (kind, text_only, target))
         if key in CONDUCTOR_REFUSED:
-            return ("deny", "%s (Principle 3).%s %s" % (kind, text_only, self.conductor_refusal(key)))
+            return ("deny", "%s.%s %s" % (kind, text_only, self.conductor_refusal(key)))
         return ("ask", "%s It is pre-approved when the brief's `Pre-approved:` line lists `%s`."
                        % (ASK_FOR[key], key))
 
@@ -384,14 +321,12 @@ class Ctx:
         if a.state == "no-work":
             return ("This session has no active work folder, so no brief pre-approves it. Read or write "
                     "the work's brief %s first. If it does not pre-approve `%s`, %s" % (a.shown, key, add_key))
-        if key in a.listed and a.state == "newer":
-            return ("The brief %s lists `%s`, but it was written or changed after the user last spoke, "
-                    "so the user has not confirmed this version of the brief. Show the user the change "
-                    "and tell them what will run and why, " % (a.shown, key)) + ask_user
-        if key in a.listed and a.state == "no-turn":
-            return ("The brief %s lists `%s`, but no user turn is recorded for this session, so the "
-                    "user has not confirmed this version of the brief. Show the user the brief and tell "
-                    "them what will run and why, " % (a.shown, key)) + ask_user
+        if a.state == "no-brief":
+            return ("The active work folder has no brief %s, so nothing pre-approves it. Write the brief "
+                    "first. Then, to run this command, %s" % (a.shown, add_key))
+        if key in a.listed and a.state in ("newer", "no-turn"):
+            return ("The brief %s lists `%s`, but %s. Show the user the %s and tell them what will run "
+                    "and why, " % (a.shown, key, a.unconfirmed, "change" if a.state == "newer" else "brief")) + ask_user
         return "The brief %s does not pre-approve it. To run it, %s" % (a.shown, add_key)
 
     def may_write(self, text):
@@ -400,341 +335,20 @@ class Ctx:
         if not text or "__SUB__" in text:
             return False  # the target is the output of a command substitution, so it is unknown
         path = c.resolve(text, self.data)
-        if self.role == "conductor":
+        if self.actor == "conductor":
             return conductor_may_write(path, self.data, self.approval)
-        if self.role == "readonly":
+        if self.actor == "readonly":
             return readonly_may_write(path, self.data)
-        if self.role == "editor":
+        if self.actor == "editor":
             return editor_may_write(path, self.data)
         return impl_may_write(path, self.data)
 
     @property
     def why(self):
-        return WHY.get(self.role, "")
+        return WHY.get(self.actor, "")
 
 
-# ---------------------------------------------------------------- reading shell commands
-
-_HEREDOC = re.compile(r"(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([A-Za-z_]\w*))")
-
-
-def strip_heredocs(cmd):
-    """Take heredoc bodies out. Returns (command without bodies, [body, ...])."""
-    lines = cmd.split("\n")
-    kept, bodies = [], []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        kept.append(line)
-        i += 1
-        for m in _HEREDOC.finditer(line):
-            tag = m.group(1) or m.group(2) or m.group(3)
-            j = i
-            while j < len(lines) and lines[j].strip() != tag:
-                j += 1
-            if j < len(lines):  # treat it as a heredoc only when the terminator is found
-                bodies.append("\n".join(lines[i:j]))
-                i = j + 1
-    return "\n".join(kept), bodies
-
-
-def split_lines(cmd):
-    """Split on newlines outside quotes. A trailing backslash joins lines."""
-    lines, cur, quote = [], [], None
-    i, n = 0, len(cmd)
-    while i < n:
-        ch = cmd[i]
-        if quote is None:
-            if ch == "\\" and i + 1 < n:
-                if cmd[i + 1] == "\n":
-                    i += 2
-                    continue
-                cur.append(cmd[i:i + 2])
-                i += 2
-                continue
-            if ch in "'\"":
-                quote = ch
-            elif ch == "\n":
-                lines.append("".join(cur))
-                cur = []
-                i += 1
-                continue
-        elif quote == "'":
-            if ch == "'":
-                quote = None
-        else:
-            if ch == "\\" and i + 1 < n:
-                cur.append(cmd[i:i + 2])
-                i += 2
-                continue
-            if ch == '"':
-                quote = None
-        cur.append(ch)
-        i += 1
-    lines.append("".join(cur))
-    return lines
-
-
-def _quote_end(text, j, quote):
-    """Index just past the quote that closes the one opened before `j`."""
-    n = len(text)
-    if quote == "'":
-        k = text.find("'", j)
-        if k < 0:
-            raise ValueError("unclosed single quote")
-        return k + 1
-    while j < n:
-        ch = text[j]
-        if ch == "\\":
-            j += 2
-        elif ch == '"':
-            return j + 1
-        elif text.startswith("$(", j):
-            j = _paren_end(text, j + 2)
-        elif ch == "`":
-            j = _backtick_end(text, j + 1)
-        else:
-            j += 1
-    raise ValueError("unclosed double quote")
-
-
-def _backtick_end(text, j):
-    """Index just past the backtick that closes the one opened before `j`."""
-    n = len(text)
-    while j < n:
-        if text[j] == "\\":
-            j += 2
-        elif text[j] == "`":
-            return j + 1
-        else:
-            j += 1
-    raise ValueError("unclosed backtick")
-
-
-def _paren_end(text, j):
-    """Index just past the `)` that closes a `$(` opened before `j`. Quoted text is skipped."""
-    depth, n = 1, len(text)
-    while j < n:
-        ch = text[j]
-        if ch == "\\":
-            j += 2
-            continue
-        if ch in "'\"":
-            j = _quote_end(text, j + 1, ch)
-            continue
-        if ch == "`":
-            j = _backtick_end(text, j + 1)
-            continue
-        if ch == "(":
-            depth += 1
-        elif ch == ")":
-            depth -= 1
-            if not depth:
-                return j + 1
-        j += 1
-    raise ValueError("unclosed $(")
-
-
-def extract_substitutions(line):
-    """Pull out the commands inside `$(...)` and backticks.
-
-    Returns (line with placeholders, [inner command, ...]).
-    """
-    out, subs = [], []
-    i, n = 0, len(line)
-    in_single = in_double = False
-    while i < n:
-        ch = line[i]
-        if in_single:
-            out.append(ch)
-            if ch == "'":
-                in_single = False
-            i += 1
-            continue
-        if ch == "\\" and i + 1 < n:
-            out.append(line[i:i + 2])
-            i += 2
-            continue
-        if ch == '"':
-            in_double = not in_double
-        elif ch == "'" and not in_double:
-            in_single = True
-        elif ch == "$" and line.startswith("$(", i) and not line.startswith("$((", i):
-            j = _paren_end(line, i + 2)
-            subs.append(line[i + 2:j - 1])
-            out.append("__SUB__")
-            i = j
-            continue
-        elif ch == "`":
-            j = _backtick_end(line, i + 1)
-            subs.append(line[i + 1:j - 1])
-            out.append("__SUB__")
-            i = j
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out), subs
-
-
-def mask_quotes(line):
-    """Replace quoted parts with placeholders, so a `>` or `|` inside quotes is not read as an operator."""
-    out, table = [], []
-    i, n = 0, len(line)
-    while i < n:
-        ch = line[i]
-        if ch == "\\" and i + 1 < n:
-            out.append(line[i:i + 2])
-            i += 2
-            continue
-        if ch == "'":
-            j = line.find("'", i + 1)
-            if j < 0:
-                raise ValueError("unclosed single quote")
-            table.append(line[i + 1:j])
-            out.append("__Q%d__" % (len(table) - 1))
-            i = j + 1
-            continue
-        if ch == '"':
-            j, buf = i + 1, []
-            while j < n and line[j] != '"':
-                if line[j] == "\\" and j + 1 < n and line[j + 1] in '"\\$`\n':
-                    buf.append(line[j + 1])
-                    j += 2
-                else:
-                    buf.append(line[j])
-                    j += 1
-            if j >= n:
-                raise ValueError("unclosed double quote")
-            table.append("".join(buf))
-            out.append("__Q%d__" % (len(table) - 1))
-            i = j + 1
-            continue
-        out.append(ch)
-        i += 1
-    return "".join(out), table
-
-
-_Q = re.compile(r"__Q(\d+)__")
-
-
-def tokenize(masked, table):
-    """Returns [(masked token, real text, is it an operator)]."""
-    lex = shlex.shlex(masked.replace("\\;", " __SEMI__ "), posix=True, punctuation_chars=True)
-    lex.whitespace_split = True
-    lex.commenters = ""
-    tokens = []
-    for raw in lex:
-        is_op = bool(raw) and all(ch in "();<>|&" for ch in raw)
-        text = _Q.sub(lambda m: table[int(m.group(1))], raw)
-        tokens.append((raw, text, is_op))
-    return tokens
-
-
-class Seg:
-    def __init__(self):
-        self.words = []
-        self.raws = []
-        self.redirs = []
-        self.targets = []
-
-
-def build_segments(tokens):
-    """Split into simple commands at the operators, and collect output redirection targets."""
-    segs, cur = [], Seg()
-    i, n = 0, len(tokens)
-
-    def next_word(k):
-        return tokens[k + 1][1] if k + 1 < n and not tokens[k + 1][2] else None
-
-    def drop_fd():
-        # A file descriptor number in front of a redirection, like the 2 in `2>file`
-        if cur.words and re.fullmatch(r"\d{1,2}", cur.words[-1]):
-            cur.words.pop()
-            cur.raws.pop()
-
-    while i < n:
-        raw, text, is_op = tokens[i]
-        if not is_op:
-            cur.words.append(text)
-            cur.raws.append(raw)
-            i += 1
-            continue
-        target = next_word(i)
-        if target is not None and text in (">", ">>", ">|", "&>", "&>>", ">&", "<&", "<", "<<", "<<<", "<>"):
-            cur.targets += [target, tokens[i + 1][0]]
-        if text in (">", ">>", ">|", "&>", "&>>"):
-            drop_fd()
-            if target is not None:
-                cur.redirs.append(target)
-                i += 2
-            else:
-                i += 1
-            continue
-        if text in (">&", "<&"):
-            drop_fd()
-            if target is not None:
-                if text == ">&" and not re.fullmatch(r"\d+|-", target):
-                    cur.redirs.append(target)
-                i += 2
-            else:
-                i += 1
-            continue
-        if text in ("<", "<<", "<<<", "<>"):
-            drop_fd()
-            i += 2 if target is not None else 1
-            continue
-        if cur.words or cur.redirs or cur.targets:
-            segs.append(cur)
-        cur = Seg()
-        i += 1
-    if cur.words or cur.redirs or cur.targets:
-        segs.append(cur)
-    return segs
-
-
-def read_line(line):
-    """Parse one line of a command. Raises ValueError when it cannot be read.
-
-    Returns (line with placeholders, [inner command, ...], tokens, tokens of a trailing comment).
-    The first item of each token here is its text with the quotes kept.
-    """
-    line, subs = extract_substitutions(line)
-    masked, table = mask_quotes(line)
-    tokens = [(_Q.sub(lambda m: '"%s"' % table[int(m.group(1))], raw), text, is_op)
-              for raw, text, is_op in tokenize(masked, table)]
-    for i, (raw, _text, is_op) in enumerate(tokens):
-        if not is_op and raw.startswith("#"):
-            return line, subs, tokens[:i], tokens[i:]
-    return line, subs, tokens, []
-
-
-_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-
-
-def unwrap(words):
-    """Strip leading shell keywords, variable assignments, and wrappers such as sudo, env, and xargs."""
-    via_xargs = False
-    w = list(words)
-    while w:
-        head = w[0]
-        if head in KEYWORDS or _ASSIGN.match(head):
-            w.pop(0)
-            continue
-        name = os.path.basename(head)
-        if name not in WRAPPERS:
-            break
-        w.pop(0)
-        if name == "xargs":
-            via_xargs = True
-        takes_value = VALUE_OPTS.get(name, ())
-        while w and (w[0].startswith("-") or (name == "env" and _ASSIGN.match(w[0]))):
-            opt = w.pop(0)
-            if opt in takes_value and w:
-                w.pop(0)
-        if name == "timeout" and w:
-            w.pop(0)  # the duration argument
-    return w, via_xargs
-
+# ---------------------------------------------------------------- judging
 
 def worst(results):
     results = [r for r in results if r]
@@ -820,11 +434,28 @@ def inline_codes(name, args):
     return codes
 
 
+FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
+FIND_WRITES = ("-fprint", "-fprint0", "-fprintf", "-fls")
+
+
+def sed_in_place(args):
+    return any(a == "--in-place" or a.startswith("--in-place=")
+               or (not a.startswith("--") and re.match(r"^-[A-Za-z]*i", a)) for a in args)
+
+
+def perl_in_place(args):
+    return any(not a.startswith(("--", "-M", "-I")) and re.match(r"^-[A-Za-z0-9]*i", a) for a in args)
+
+
+def awk_in_place(args):
+    return ("-i" in args and "inplace" in args) or "-iinplace" in args
+
+
 def find_rule(args, ctx):
     """File-writing flags of find. Commands run by -exec are judged by find_exec_rule."""
     if "-delete" in args:
         return ("deny", "`find -delete` deletes files. " + ctx.why)
-    for flag in ("-fprint", "-fprint0", "-fprintf", "-fls"):
+    for flag in FIND_WRITES:
         if flag in args:
             k = args.index(flag)
             if k + 1 >= len(args) or not ctx.may_write(args[k + 1]):
@@ -836,7 +467,7 @@ def find_exec_rule(args, ctx, heredocs, depth):
     results = []
     i = 0
     while i < len(args):
-        if args[i] in ("-exec", "-execdir", "-ok", "-okdir"):
+        if args[i] in FIND_EXEC:
             j, sub = i + 1, []
             while j < len(args) and args[j] not in ("__SEMI__", "+"):
                 sub.append(args[j])
@@ -984,7 +615,7 @@ def outbound_key(name, args):
 
 
 def category_rule(name, args, ctx, heredocs, depth):
-    """Rules for the pre-approval categories. They apply to every role."""
+    """Rules for the pre-approval categories. They apply to every actor."""
     results = []
     if name == "git":
         results.append(git_rule(args, ctx))
@@ -1024,12 +655,11 @@ def file_rule(name, args, via_xargs, ctx, heredocs):
             return None
         return ("deny", "`patch` changes files. " + ctx.why)
     if name in ("sed", "gsed"):
-        if any(a == "--in-place" or a.startswith("--in-place=")
-               or (not a.startswith("--") and re.match(r"^-[A-Za-z]*i", a)) for a in args):
+        if sed_in_place(args):
             return ("deny", "`sed -i` edits files in place. " + ctx.why)
         return None
     if name in ("awk", "gawk", "mawk"):
-        if ("-i" in args and "inplace" in args) or "-iinplace" in args:
+        if awk_in_place(args):
             return ("deny", "`awk -i inplace` edits files in place. " + ctx.why)
         if any(re.search(r">>?\s*\"", a) for a in plain):
             return ("deny", "This awk script appears to write to a file. " + ctx.why)
@@ -1041,9 +671,7 @@ def file_rule(name, args, via_xargs, ctx, heredocs):
     if name in EDITORS:
         return ("deny", "`%s` is a file editor. %s" % (name, ctx.why))
     if name in INTERPRETERS or re.fullmatch(r"python\d(\.\d+)?", name):
-        if name == "perl" and any(
-            not a.startswith(("--", "-M", "-I")) and re.match(r"^-[A-Za-z0-9]*i", a) for a in args
-        ):
+        if name == "perl" and perl_in_place(args):
             return ("deny", "`perl -i` edits files in place. " + ctx.why)
         codes = inline_codes(name, args)
         if heredocs and (not plain or "-" in args):
@@ -1061,7 +689,7 @@ def file_rule(name, args, via_xargs, ctx, heredocs):
 
 
 def editor_file_rule(name, args, ctx):
-    """The `editor` role: a command that writes files is refused when it names a path inside `.orchestra/`."""
+    """The `editor` actor: a command that writes files is refused when it names a path inside `.orchestra/`."""
     plain = [a for a in args if not a.startswith("-")]
     targets = []
     if name in MUTATE_LAST:
@@ -1069,20 +697,19 @@ def editor_file_rule(name, args, ctx):
     elif name in MUTATE_ALL or name == "tee" or name in EDITORS:
         targets = plain
     elif name in ("sed", "gsed"):
-        if any(a == "--in-place" or a.startswith("--in-place=")
-               or (not a.startswith("--") and re.match(r"^-[A-Za-z]*i", a)) for a in args):
+        if sed_in_place(args):
             targets = plain
     elif name == "perl":
-        if any(not a.startswith(("--", "-M", "-I")) and re.match(r"^-[A-Za-z0-9]*i", a) for a in args):
+        if perl_in_place(args):
             targets = plain
     elif name in ("awk", "gawk", "mawk"):
-        if ("-i" in args and "inplace" in args) or "-iinplace" in args:
+        if awk_in_place(args):
             targets = plain
     elif name == "dd":
         targets = [a[3:] for a in args if a.startswith("of=")]
     elif name == "find":
         targets = [args[k + 1] for k, a in enumerate(args[:-1])
-                   if a in ("-fprint", "-fprint0", "-fprintf", "-fls")]
+                   if a in FIND_WRITES]
         if "-delete" in args:
             targets += [a for a in args if not a.startswith(("-", "(", ")", "!"))]
     elif name == "curl":
@@ -1091,7 +718,7 @@ def editor_file_rule(name, args, ctx):
         targets = [args[k + 1] for k, a in enumerate(args[:-1]) if re.fullmatch(r"-[A-Za-z]*O|--output-document", a)]
         targets += [a.split("=", 1)[1] for a in args if a.startswith("--output-document=")]
     for target in targets:
-        if target and "__SUB__" not in target and c.inside(c.resolve(target, ctx.data), c.work_dir(ctx.data)):
+        if target and "__SUB__" not in target and c.inside(c.resolve(target, ctx.data), c.orchestra_dir(ctx.data)):
             return ("deny", "`%s` changes files inside `.orchestra/` here. %s" % (name, ctx.why))
     return None
 
@@ -1099,9 +726,9 @@ def editor_file_rule(name, args, ctx):
 def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
     """Per-command rules. An implementation subagent gets only the category rules."""
     results = [category_rule(name, args, ctx, heredocs, depth)]
-    if ctx.role == "editor":
+    if ctx.actor == "editor":
         results.append(editor_file_rule(name, args, ctx))
-    elif ctx.role != "impl":
+    elif ctx.actor != "impl":
         results.append(file_rule(name, args, via_xargs, ctx, heredocs))
     return worst(results)
 
@@ -1115,7 +742,6 @@ def tool_rule(name, args, via_xargs, ctx, heredocs, depth):
 GREPS = {"grep", "egrep", "fgrep"}
 RG_RUNS = {"--pre", "--hostname-bin"}
 GIT_SEARCH = {"grep", "log", "show", "diff"}
-FIND_EXEC = {"-exec", "-execdir", "-ok", "-okdir"}
 # Options of a wrapper that take no value. Before the program, any other option might take the
 # next word as its value, and that word would then not be the program.
 FLAG_OPTS = {
@@ -1261,7 +887,7 @@ def judge_segment(seg, ctx, heredocs, depth):
     args = words[1:]
     results = []
 
-    # Applies to every role: nested shells and the claude CLI
+    # Applies to every actor: nested shells and the claude CLI
     if name in SHELLS:
         code = None
         for i, a in enumerate(args[:-1]):
@@ -1277,7 +903,7 @@ def judge_segment(seg, ctx, heredocs, depth):
     elif name == "claude":
         results.append(claude_rule(args))
 
-    if ctx.role != "impl":
+    if ctx.actor != "impl":
         for target in seg.redirs:
             if not ctx.may_write(target):
                 results.append(("deny", "Redirecting output to `%s` writes a file. %s" % (target, ctx.why)))
@@ -1290,7 +916,7 @@ def judge_segment(seg, ctx, heredocs, depth):
 def judge_command(cmd, ctx, depth=0):
     """Judge a whole command. Returns None (pass) or ("deny" | "ask", reason)."""
     if depth > 5:
-        return None if ctx.role in IMPL_LIKE else ("deny", DENY_PARSE)
+        return None if ctx.actor in IMPL_LIKE else ("deny", DENY_PARSE)
     results = []
     if data_hit(cmd, depth)[0]:
         # Nothing lets a data command through because its text looks like it targets a test or
@@ -1306,7 +932,7 @@ def judge_command(cmd, ctx, depth=0):
         try:
             _line, subs, tokens, _comment = read_line(line)
         except ValueError:
-            if ctx.role not in IMPL_LIKE:
+            if ctx.actor not in IMPL_LIKE:
                 results.append(("deny", DENY_PARSE))
             continue
         for inner in subs:
@@ -1321,13 +947,13 @@ def judge_command(cmd, ctx, depth=0):
 _REPORTS_IN_COMMAND = re.compile(r"\.orchestra/[^\s/'\"]+/reports")
 
 
-def handle_bash(cmd, data, role):
-    if role == "conductor" and _REPORTS_IN_COMMAND.search(cmd):
+def handle_bash(cmd, data, actor):
+    if actor == "conductor" and _REPORTS_IN_COMMAND.search(cmd):
         c.deny(
-            "Do not handle the reports folder from the shell (Principle 7). Write the review "
+            "Do not handle the reports folder from the shell. Write the review "
             "record first, then open the report with the Read tool."
         )
-    result = judge_command(cmd, Ctx(data, role, cmd))
+    result = judge_command(cmd, Ctx(data, actor, cmd))
     if result is None:
         c.allow()
     kind, reason = result
@@ -1354,34 +980,29 @@ def conductor_write_refusal(path, approval):
                 "write the work's brief %s first." % (WRITES_EXCEPTION, a.shown))
     if a.state == "no-brief":
         return "%s The active work folder has no brief %s, so no brief lists this file." % (WRITES_EXCEPTION, a.shown)
-    if path in a.listed_files and a.state == "newer":
-        return ("The brief %s lists this file on its `Conductor writes:` line, but it was written or "
-                "changed after the user last spoke, so the user has not confirmed this version of the "
-                "brief. %s" % (a.shown, show_and_ask))
-    if path in a.listed_files and a.state == "no-turn":
-        return ("The brief %s lists this file on its `Conductor writes:` line, but no user turn is "
-                "recorded for this session, so the user has not confirmed this version of the brief. "
-                "%s" % (a.shown, show_and_ask))
+    if path in a.listed_files and a.state in ("newer", "no-turn"):
+        return ("The brief %s lists this file on its `Conductor writes:` line, but %s. %s"
+                % (a.shown, a.unconfirmed, show_and_ask))
     return "The brief %s does not list this file. %s" % (a.shown, WRITES_EXCEPTION)
 
 
-def handle_write(path_text, data, role):
+def handle_write(path_text, data, actor):
     path = c.resolve(path_text, data)
-    if role == "conductor":
+    if actor == "conductor":
         if conductor_may_write(path, data):
-            if c.inside(path, c.work_dir(data)):
+            if c.inside(path, c.orchestra_dir(data)):
                 c.ensure_gitignore(data)
-            brief_of = c.brief_unit(path, data)
+            brief_of = c.brief_work_folder(path, data)
             if brief_of:
                 c.set_active_work(data, brief_of)
             c.allow()
         if c.in_reports(path, data):
-            c.deny("Reports are written by subagents. The conductor cannot write or edit a report (Principle 7).")
+            c.deny("Reports are written by subagents. The conductor cannot write or edit a report.")
         refusal = "You cannot edit `%s` directly. %s" % (path_text, WHY["conductor"])
-        if c.inside(path, c.project_dir(data)) and not c.inside(path, c.work_dir(data)):
-            refusal += " " + conductor_write_refusal(path, brief_approval(data))
+        if c.inside(path, c.project_dir(data)) and not c.inside(path, c.orchestra_dir(data)):
+            refusal += " " + conductor_write_refusal(path, c.brief_approval(data))
         c.deny(refusal)
-    if role == "readonly":
+    if actor == "readonly":
         if readonly_may_write(path, data):
             c.allow()
         c.deny(
@@ -1389,7 +1010,7 @@ def handle_write(path_text, data, role):
             "`.orchestra/<work>/reports/` and the working files of your task under "
             "`.orchestra/<work>/files/`." % (path_text, WHY["readonly"])
         )
-    if role == "editor":
+    if actor == "editor":
         if editor_may_write(path, data):
             c.allow()
         c.deny("You cannot edit `%s`. %s" % (path_text, WHY["editor"]))
@@ -1415,11 +1036,11 @@ def main():
         if name not in c.ROSTER:
             c.allow()
         if name == "haiku-editor":
-            role = "editor"
+            actor = "editor"
         else:
-            role = "readonly" if c.ROSTER[name]["kind"] == "readonly" else "impl"
+            actor = "readonly" if c.ROSTER[name]["kind"] == "readonly" else "impl"
     elif c.main_is_conductor(data):
-        role = "conductor"
+        actor = "conductor"
     else:
         c.allow()
 
@@ -1428,13 +1049,13 @@ def main():
             path_text = ti.get("file_path") or ti.get("notebook_path")
             if not path_text:
                 c.allow()
-            handle_write(path_text, data, role)
+            handle_write(path_text, data, actor)
         elif isinstance(ti.get("command"), str):
-            handle_bash(ti["command"], data, role)
+            handle_bash(ti["command"], data, actor)
     except SystemExit:
         raise
     except Exception as exc:  # a fault in the guard does not block the work, but a person confirms it
-        if role not in IMPL_LIKE:
+        if actor not in IMPL_LIKE:
             c.ask(
                 "The guard script failed (%s) and could not check this call. The user has to "
                 "confirm it." % type(exc).__name__

@@ -88,7 +88,7 @@ def main():
         )
     else:
         lines.append(
-            "%s Hook scripts did not behave as expected. Run `python3 %s/tests/test_hooks.py`." % (WARN, ROOT)
+            "%s Hook scripts did not behave as expected. Run `python3 -m unittest discover -s %s/tests`." % (WARN, ROOT)
         )
 
     lines.append(
@@ -103,22 +103,22 @@ def main():
 
     # Work folders
     root = os.path.join(project, ".orchestra")
-    units = []
+    work_folders = []
     try:
-        units = sorted(e.name for e in os.scandir(root) if e.is_dir())
+        work_folders = sorted(e.name for e in os.scandir(root) if e.is_dir())
     except OSError:
         pass
-    if not units:
+    if not work_folders:
         lines.append("%s No work folders yet under %s. One is created with the first brief." % (OK, root))
     else:
         lines.append("%s Work folders under %s:" % (OK, root))
-        for name in units:
-            unit = os.path.join(root, name)
-            brief = "brief" if os.path.isfile(os.path.join(unit, "brief.md")) else "no brief"
+        for name in work_folders:
+            work_folder = os.path.join(root, name)
+            brief = "brief" if os.path.isfile(os.path.join(work_folder, "brief.md")) else "no brief"
             lines.append(
                 "     %s: %s, %d task specs, %d reports, %d review records"
-                % (name, brief, count(os.path.join(unit, "tasks")), count(os.path.join(unit, "reports")),
-                   count(os.path.join(unit, "reviews")))
+                % (name, brief, count(os.path.join(work_folder, "tasks")), count(os.path.join(work_folder, "reports")),
+                   count(os.path.join(work_folder, "reviews")))
             )
 
     sys.stdout.buffer.write(("\n".join(lines) + "\n").encode("utf-8"))

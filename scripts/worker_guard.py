@@ -22,7 +22,8 @@ It reads both input formats:
   agy    {"toolCall": {"name": "run_command" | "write_file" | ..., "args": {...}}, "cwd": ...}
 
 and answers in the format of the CLI that called it. Each refusal is logged for `worker.py` to
-report. A fault in the hook lets the call through, as for a Claude subagent, and is logged.
+report, and every call, let through or not, goes to the context's `activity` log for
+`worker.py watch`. A fault in the hook lets the call through, as for a Claude subagent, and is logged.
 
 The shell check reads the command line. It is a tripwire, not a sandbox: a request made from
 inside a script it starts is not seen.
@@ -39,6 +40,8 @@ import guard_main as gm  # noqa: E402
 
 PATCH_PATH = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
 AGY_PATH_KEYS = ("Path", "TargetFile", "AbsolutePath", "FilePath", "file_path", "path")
+# What a call is aimed at, for the activity log: a path, or the address or query of a lookup.
+AGY_TARGET_KEYS = AGY_PATH_KEYS + ("Url", "Query")
 CODEX_SHELL = ("Bash", "shell", "exec_command", "local_shell")
 AGY_SHELL = ("run_command",)
 # agy's file-writing tools. `write_file` was seen in a run; the others are matched by name.
@@ -66,10 +69,10 @@ def read_call(data):
     return "codex", name, text if name in CODEX_SHELL else None, [], False
 
 
-def judge(ctx, data):
-    """None to let the call through, or the reason to refuse it."""
-    cli, name, command, paths, bypass = read_call(data)
-    role = "readonly" if ctx.get("kind") == "readonly" else "impl"
+def judge(ctx, data, call):
+    """None to let the call through, or the reason to refuse it. `call` is what read_call returned."""
+    _cli, _name, command, paths, bypass = call
+    actor = "readonly" if ctx.get("kind") == "readonly" else "impl"
     check = {"cwd": ctx["project"]}
     if bypass:
         return ("This run stays in its sandbox, and nobody is present to approve leaving it. Do not "
@@ -78,30 +81,24 @@ def judge(ctx, data):
     base = data.get("cwd") or ctx["project"]
     for text in paths:
         path = os.path.realpath(text if os.path.isabs(text) else os.path.join(base, text))
-        allowed = gm.readonly_may_write(path, check) if role == "readonly" else gm.impl_may_write(path, check)
+        allowed = gm.readonly_may_write(path, check) if actor == "readonly" else gm.impl_may_write(path, check)
         if not allowed:
             where = os.path.relpath(path, ctx["project"]) if c.inside(path, ctx["project"]) else path
-            if role == "readonly":
+            if actor == "readonly":
                 return ("Your role is read-only: write only your report and your files/ folder. `%s` "
                         "is neither. Put the change in your report as a recommendation." % where)
             return ("Inside .orchestra/, write only your report and your files/ folder. `%s` belongs to "
                     "the conductor. Do not look for another way to change it." % where)
     if command:
-        approval = gm.Approval(ctx.get("unit"), set(ctx.get("keys") or []), "confirmed")
-
-        class WorkerCtx(gm.Ctx):
-            @property
-            def approval(self_inner):
-                return approval
-
-        result = gm.judge_command(command, WorkerCtx(check, role, command))
+        approval = c.Approval(ctx.get("work_folder"), set(ctx.get("keys") or []), "confirmed")
+        result = gm.judge_command(command, gm.Ctx(check, actor, command, approval))
         if result is not None:
             return result[1]  # an `ask` has nobody to answer it, so it is refused too
     return None
 
 
-def log(ctx, record):
-    path = ctx.get("log")
+def log(ctx, record, key="log"):
+    path = ctx.get(key)
     if not path:
         return
     try:
@@ -130,11 +127,17 @@ def main():
         os.environ["CLAUDE_PROJECT_DIR"] = ctx["project"]
         raw = sys.stdin.read()
         data = json.loads(raw) if raw.strip() else {}
-        cli = read_call(data)[0]
-        reason = judge(ctx, data)
+        call = read_call(data)
+        cli, name, command, paths, _bypass = call
+        reason = judge(ctx, data, call)
+        now = time.time()
+        # Every call, let through or not, for the user who follows the run with `worker.py watch`.
+        args = (data.get("toolCall") or {}).get("args") if isinstance(data.get("toolCall"), dict) else data.get("tool_input")
+        target = next((str(args[k]) for k in AGY_TARGET_KEYS if isinstance(args, dict) and args.get(k)), "")
+        log(ctx, {"at": now, "tool": name, "command": (command or "")[:300], "paths": paths, "target": target[:300],
+                  "refused": bool(reason)}, "activity")
         if reason:
-            _, name, command, paths, _ = read_call(data)
-            log(ctx, {"at": time.time(), "tool": name, "command": (command or "")[:300], "paths": paths, "reason": reason[:300]})
+            log(ctx, {"at": now, "tool": name, "command": (command or "")[:300], "paths": paths, "reason": reason[:300]})
         answer(cli, reason)
     except Exception as exc:  # a fault lets the call through, as for a Claude subagent
         log(ctx, {"at": time.time(), "fault": "%s: %s" % (type(exc).__name__, exc)})

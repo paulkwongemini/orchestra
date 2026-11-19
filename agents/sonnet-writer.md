@@ -107,7 +107,7 @@ STATUS: DONE
       "kind": "manual",
       "method": "Compare every documented command with the command definitions named in the task spec.",
       "result": "PASS",
-      "evidence": "The four documented commands match skills/setup, skills/conductor, skills/enable, and skills/disable."
+      "evidence": "The four documented commands match skills/setup, skills/conduct, skills/conductor, and skills/disable."
     }
   ],
   "unverified": []

@@ -3,6 +3,7 @@
 
     worker.py run    --cli codex --task <task spec> --role <role> [--effort <level>]
     worker.py resume --task <task spec> --message <file>
+    worker.py watch  --task <task spec> [--round N] [--no-follow] [--calls]
 
 `run` starts a fresh session on the task spec. `resume` continues the task's last session with
 the conductor's review comment, read from a file, with the same settings: a resumed Codex run
@@ -23,10 +24,16 @@ each point that a check after the run can see:
 
 The report's text is never printed, so the conductor can still review before it reads.
 
+`watch` is for the user, who follows a run in a terminal of their own while it goes: the
+worker's messages, its commands and edits from the CLI's event stream, and the guard's refusals
+as they happen. With `--calls`, the commands and edits come from the guard's log of every call
+instead, with their times. The conductor does not run it.
+
 Exit codes: 0 the run finished and nothing was flagged, 2 the run finished with warnings,
 1 the run did not finish or could not start.
 """
 import argparse
+import collections
 import hashlib
 import json
 import os
@@ -41,6 +48,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as c  # noqa: E402
 import check_report  # noqa: E402
+import worker_guard  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROLES_DIR = os.path.join(ROOT, "roles")
@@ -53,10 +61,15 @@ ROLES = {
     "analyst": {"kind": "readonly"},
 }
 
-# Folders whose changes say nothing about the work: tool caches and the like.
-GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_guard.py")
+# `engineer` and `analyst` start at `high`, `implementer` and `writer` at `medium`. For GPT-6.2 that
+# is one level above the guides' starting point for the latter two. For Gemini it is Google's own
+# default and its level for general coding.
+DEFAULT_EFFORT = {"engineer": "high", "analyst": "high", "implementer": "medium", "writer": "medium"}
+
+GUARD = os.path.join(ROOT, "scripts", "worker_guard.py")
 NETWORK_LINE = re.compile(r"^\W*worker network\W*[:：]\s*(blocked|open)\b", re.I | re.M)
 
+# Folders whose changes say nothing about the work: tool caches and the like.
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "node_modules", ".venv", "venv"}
 
 TASK_PATH = re.compile(r"^(?P<project>.*)/\.orchestra/(?P<work>[^/]+)/tasks/(?P<file>(?P<id>T\d+)[^/]*\.md)$")
@@ -73,6 +86,15 @@ class Fail(Exception):
     """A run that cannot start, with the reason for the conductor."""
 
 
+def guard_command(s):
+    """The shell command with which a CLI runs the guard for this run."""
+    return " ".join(shlex.quote(part) for part in (sys.executable, GUARD, s["guard_context"]))
+
+
+def toml_bool(value):
+    return "true" if value else "false"
+
+
 # ---------------------------------------------------------------- the CLIs
 
 class Codex:
@@ -81,9 +103,7 @@ class Codex:
     efforts = ("low", "medium", "high", "xhigh", "max", "ultra")
     models = {"engineer": "gpt-6.2-astra", "analyst": "gpt-6.2-astra",
               "implementer": "gpt-6.2-sol", "writer": "gpt-6.2-sol"}
-    # The user's choice. `implementer` and `writer` sit one level above the GPT-6.2 guides'
-    # starting point, because the user has Codex usage to spare. `analyst` may go up to `max`.
-    default_effort = {"engineer": "high", "analyst": "high", "implementer": "medium", "writer": "medium"}
+    default_effort = DEFAULT_EFFORT
 
     def home(self):
         return os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
@@ -105,18 +125,18 @@ class Codex:
         for name in self.mcp_servers():
             key = name if re.match(r"^[A-Za-z0-9_-]+$", name) else json.dumps(name)
             args += ["-c", "mcp_servers.%s.enabled=false" % key]
+        # A read-only role loses /tmp and $TMPDIR, which are writable by default: a project under
+        # /tmp would otherwise be writable to it.
+        no_tmp = toml_bool(s["kind"] == "readonly")
         args += ["-c", 'sandbox_mode="workspace-write"',
                  "-c", "sandbox_workspace_write.writable_roots=%s" % json.dumps(s["writable_roots"]),
-                 # A read-only role loses /tmp and $TMPDIR, which are writable by default: a project
-                 # under /tmp would otherwise be writable to it.
-                 "-c", "sandbox_workspace_write.exclude_slash_tmp=%s" % ("true" if s["kind"] == "readonly" else "false"),
-                 "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=%s" % ("true" if s["kind"] == "readonly" else "false"),
-                 "-c", "sandbox_workspace_write.network_access=%s" % ("true" if s["network"] else "false"),
+                 "-c", "sandbox_workspace_write.exclude_slash_tmp=%s" % no_tmp,
+                 "-c", "sandbox_workspace_write.exclude_tmpdir_env_var=%s" % no_tmp,
+                 "-c", "sandbox_workspace_write.network_access=%s" % toml_bool(s["network"]),
                  "--skip-git-repo-check", "--json"]
         # The guard is passed for this run only, so it needs no trust review and touches no
         # config. The flag also runs the user's other enabled hooks without their review.
-        guard = "%s %s %s" % (shlex.quote(sys.executable), shlex.quote(GUARD), shlex.quote(s["guard_context"]))
-        args += ["-c", "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=%s,timeout=15}]}]" % json.dumps(guard),
+        args += ["-c", "hooks.PreToolUse=[{matcher=\".*\",hooks=[{type=\"command\",command=%s,timeout=15}]}]" % json.dumps(guard_command(s)),
                  "--dangerously-bypass-hook-trust"]
         return args
 
@@ -173,20 +193,18 @@ class Agy:
     efforts = ("low", "medium", "high", "xhigh")
     families = {"engineer": "neon", "analyst": "neon", "implementer": "hydrogen", "writer": "hydrogen"}
     models = {role: "gemini-4-%s" % family for role, family in families.items()}
-    # Google gives HIGH as the default and MEDIUM for general coding. `xhigh` is agy's top level.
-    default_effort = {"engineer": "high", "analyst": "high", "implementer": "medium", "writer": "medium"}
+    default_effort = DEFAULT_EFFORT
 
     def model_id(self, s):
         return "%s-%s" % (s["model"], s["effort"])  # agy names the effort in the model id
 
     def prepare(self, s, paths):
-        digest = hashlib.sha1(paths["unit"].encode("utf-8")).hexdigest()[:12]
+        digest = hashlib.sha1(paths["work_folder"].encode("utf-8")).hexdigest()[:12]
         workspace = os.path.join(tempfile.gettempdir(), "orchestra-agy", digest, paths["task"])
         os.makedirs(os.path.join(workspace, ".agents"), exist_ok=True)
-        guard = "%s %s %s" % (shlex.quote(sys.executable), shlex.quote(GUARD), shlex.quote(s["guard_context"]))
         with open(os.path.join(workspace, ".agents", "hooks.json"), "w", encoding="utf-8") as f:
             json.dump({"orchestra-guard": {"PreToolUse": [{"matcher": "*", "hooks": [
-                {"type": "command", "command": guard, "timeout": 15}]}]}}, f, indent=2)
+                {"type": "command", "command": guard_command(s), "timeout": 15}]}]}}, f, indent=2)
         s["cwd"] = workspace
         if s["kind"] == "impl":
             s["add_dirs"], s["read_dirs"] = [paths["project"]], []
@@ -199,7 +217,9 @@ class Agy:
         # The role files live in the plugin, outside the workspace. Without this rule the worker
         # cannot read them: headless mode refuses a read_file it cannot ask about.
         allow += ["read_file(%s)" % d for d in [ROLES_DIR] + list(s.get("read_dirs") or [])]
-        args = ["--model", self.model_id(s), "--output-format", "json", "--disable-slash-commands",
+        # stream-json writes one event per line as the run goes, so `worker.py watch` can follow it.
+        # Its last event, `result`, holds what `json` prints at the end.
+        args = ["--model", self.model_id(s), "--output-format", "stream-json", "--disable-slash-commands",
                 "--settings", json.dumps({"permissions": {"allow": allow}})]
         for d in s.get("add_dirs") or []:
             args += ["--add-dir", d]
@@ -212,11 +232,28 @@ class Agy:
         return [self.binary, "-p", message, "--conversation", s["session_id"]] + self.settings(s), b""
 
     def _result(self, path):
+        """The run's result: the `result` event of a stream, or the one object `json` prints."""
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
+                text = f.read()
+        except OSError:
+            return {}
+        found = {}
+        for line in text.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
+                found = event["result"]
+            elif isinstance(event, dict) and not found and event.get("event") == "init" and event.get("conversation_id"):
+                found = {"conversation_id": event["conversation_id"]}  # a run cut short still has its id
+        if found:
+            return found
+        try:
+            data = json.loads(text)
+            return data if isinstance(data, dict) and "event" not in data else {}
+        except ValueError:
             return {}
 
     def read_events(self, path):
@@ -228,7 +265,7 @@ class Agy:
         return (str(data["conversation_id"]) if data.get("conversation_id") else None), usage
 
     def after_run(self, events, last_message):
-        """agy prints one JSON object. Its `response` is the worker's last message."""
+        """The result's `response` is the worker's last message."""
         data = self._result(events)
         text = data.get("response") or ""
         if data.get("status") and data.get("status") != "SUCCESS":
@@ -248,30 +285,30 @@ def locate(task_arg):
     m = TASK_PATH.match(spec)
     if not m or not os.path.isfile(spec):
         raise Fail("`%s` is not a task spec under `.orchestra/<work>/tasks/` whose name starts with a task ID such as T01." % task_arg)
-    project, unit, tid = m.group("project"), os.path.join(m.group("project"), c.WORKDIR, m.group("work")), m.group("id")
+    project, work_folder, tid = m.group("project"), os.path.join(m.group("project"), c.ORCHESTRA_DIR, m.group("work")), m.group("id")
     report = None
     body = c.section_body(c.read_text(spec), "Report") or ""
     hit = re.search(r"`([^`]*reports/[^`]+\.md)`", body)
     if hit:
         report = os.path.realpath(os.path.join(project, hit.group(1)))
-        if not report.startswith(os.path.join(unit, "reports") + os.sep):
+        if not report.startswith(os.path.join(work_folder, "reports") + os.sep):
             raise Fail("The report path in the task spec, `%s`, is not under this work folder's `reports/`." % hit.group(1))
-    report = report or os.path.join(unit, "reports", tid + ".md")
-    files = os.path.join(unit, "files", tid)
-    return {"spec": spec, "project": project, "unit": unit, "task": tid, "report": report,
+    report = report or os.path.join(work_folder, "reports", tid + ".md")
+    files = os.path.join(work_folder, "files", tid)
+    return {"spec": spec, "project": project, "work_folder": work_folder, "task": tid, "report": report,
             "files": files, "record": os.path.join(files, "cli")}
 
 
-def brief_settings(unit):
+def brief_settings(work_folder):
     """The brief's pre-approved keys, and whether the workers may use the network (open unless blocked)."""
-    text = c.read_text(os.path.join(unit, "brief.md"))
+    text = c.read_text(os.path.join(work_folder, "brief.md"))
     keys = sorted(c.preapproved_keys(text))
     m = NETWORK_LINE.search(c.section_body(text, "Constraints") or "")
     return keys, not (m and m.group(1).lower() == "blocked")
 
 
 def guard_refusals(path, since):
-    """What the guard refused since a moment, as (tool, what, reason) tuples."""
+    """The guard's records of what it refused since a moment."""
     out = []
     try:
         with open(path, encoding="utf-8") as f:
@@ -281,7 +318,7 @@ def guard_refusals(path, since):
                 except ValueError:
                     continue
                 if r.get("at", 0) >= since and not r.get("fault"):
-                    out.append((r.get("tool"), r.get("command") or ", ".join(r.get("paths") or []), r.get("reason", "")))
+                    out.append(r)
     except OSError:
         pass
     return out
@@ -303,6 +340,21 @@ def scope_paths(spec, project):
 
 def in_scope(rel, scope):
     return any(rel == p or rel.startswith(p + os.sep) for p in scope)
+
+
+def short(text, width=160):
+    text = " ".join(str(text or "").split())
+    return text if len(text) <= width else text[:width - 1] + "…"
+
+
+def called(r):
+    """The command or the paths of a call in the guard's log."""
+    return r.get("command") or ", ".join(r.get("paths") or [])
+
+
+def refusal(r, width):
+    """One refusal from the guard's log: the call and the first sentence of the reason."""
+    return "refused %s `%s`: %s" % (r.get("tool"), short(called(r), width), (r.get("reason") or "").split(". ")[0])
 
 
 # ---------------------------------------------------------------- what changed
@@ -342,12 +394,17 @@ def changed(before, after):
 
 # ---------------------------------------------------------------- one run
 
+Outcome = collections.namedtuple("Outcome", "code elapsed started events errors changes git_changed")
+
+
 def execute(cli, cmd, cwd, stdin, paths, round_no):
+    """Run the CLI once, and see what the run changed."""
     record = paths["record"]
     events = os.path.join(record, "events-%d.jsonl" % round_no)
     errors = os.path.join(record, "stderr-%d.txt" % round_no)
     before, git_before = snapshot(paths["project"]), git_state(paths["project"])
     started = time.time()
+    save(os.path.join(record, "live.json"), {"round": round_no, "started": started, "cli": cli.name})  # for `watch`
     try:
         with open(events, "wb") as out, open(errors, "wb") as err:
             proc = subprocess.run(cmd, cwd=cwd, input=stdin, stdout=out, stderr=err)
@@ -356,16 +413,19 @@ def execute(cli, cmd, cwd, stdin, paths, round_no):
         raise Fail("`%s` could not be started: %s" % (cmd[0], e))
     elapsed = time.time() - started
     after, git_after = snapshot(paths["project"]), git_state(paths["project"])
-    paths["started"] = started
-    return code, elapsed, events, errors, changed(before, after), git_before != git_after
+    return Outcome(code, elapsed, started, events, errors, changed(before, after), git_before != git_after)
 
 
-def report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_changed):
+def report_lines(cli, s, paths, outcome):
     """The lines the conductor reads, and whether any of them is a warning."""
+    code, elapsed, events, errors = outcome.code, outcome.elapsed, outcome.events, outcome.errors
     session, usage = cli.read_events(events)
     if session:
         s["session_id"] = session
-    rel = lambda p: os.path.relpath(p, paths["project"])  # noqa: E731
+
+    def rel(path):
+        return os.path.relpath(path, paths["project"])
+
     own = (paths["files"] + os.sep, )
     lines, warnings = [], []
     tokens = ""
@@ -388,18 +448,18 @@ def report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_chan
         if LIMIT_WORDS.search(tail) or LIMIT_WORDS.search(c.read_text(events)[-4000:]):
             warnings.append("The CLI's output mentions a usage limit. Stop this task and tell the user.")
 
-    work = [p for p in changes if not os.path.join(paths["project"], p).startswith(own)
+    work = [p for p in outcome.changes if not os.path.join(paths["project"], p).startswith(own)
             and os.path.join(paths["project"], p) != paths["report"]]
-    refused = guard_refusals(os.path.join(paths["record"], "guard.jsonl"), paths.get("started", 0))
-    for tool, what, reason in refused[:10]:
-        lines.append("GUARD: refused %s `%s`: %s" % (tool, what[:120], reason.split(". ")[0]))
+    refused = guard_refusals(os.path.join(paths["record"], "guard.jsonl"), outcome.started)
+    for r in refused[:10]:
+        lines.append("GUARD: " + refusal(r, 120))
     if len(refused) > 10:
         lines.append("GUARD: and %d more refusals, in `%s`" % (len(refused) - 10, rel(os.path.join(paths["record"], "guard.jsonl"))))
     lines.append("CHANGED: %s" % (", ".join(work[:30]) + (" and %d more" % (len(work) - 30) if len(work) > 30 else "") if work else "nothing"))
 
     scope = scope_paths(paths["spec"], paths["project"])
-    orchestra = [p for p in work if p.split(os.sep)[0] == c.WORKDIR]
-    project_files = [p for p in work if p.split(os.sep)[0] != c.WORKDIR]
+    orchestra = [p for p in work if p.split(os.sep)[0] == c.ORCHESTRA_DIR]
+    project_files = [p for p in work if p.split(os.sep)[0] != c.ORCHESTRA_DIR]
     if orchestra:
         warnings.append("Changed under `.orchestra/` outside the task's report and `files/%s/`: %s" % (paths["task"], ", ".join(orchestra)))
     if not scope:
@@ -411,7 +471,7 @@ def report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_chan
             warnings.append("Changed outside the paths under `## Scope and limits`: %s" % ", ".join(outside))
     if s["kind"] == "readonly" and project_files:
         warnings.append("A read-only role changed project files: %s" % ", ".join(project_files))
-    if git_changed:
+    if outcome.git_changed:
         warnings.append("Git state changed during the run: HEAD, the branch, the index or the stash.")
 
     if not os.path.isfile(paths["report"]):
@@ -433,16 +493,26 @@ def save(path, s):
 def write_guard_context(s, paths):
     """The guard's view of the run. Written before each run, so a key the user approved meanwhile counts."""
     with open(s["guard_context"], "w", encoding="utf-8") as f:
-        json.dump({"kind": s["kind"], "project": paths["project"], "unit": paths["unit"], "task": paths["task"],
-                   "keys": s["keys"], "log": os.path.join(paths["record"], "guard.jsonl")}, f, indent=2)
+        json.dump({"kind": s["kind"], "project": paths["project"], "work_folder": paths["work_folder"], "task": paths["task"],
+                   "keys": s["keys"], "log": os.path.join(paths["record"], "guard.jsonl"),
+                   "activity": os.path.join(paths["record"], "activity.jsonl")}, f, indent=2)
 
 
-def finish(cli, s, paths, code, elapsed, events, errors, changes, git_changed):
-    cli.after_run(events, paths["last_message"])
-    lines, warned = report_lines(cli, s, paths, code, elapsed, events, errors, changes, git_changed)
+def launch(cli, s, paths, command):
+    """Run round `s["rounds"]` of a task and report on it.
+
+    `command` builds the CLI's command and its stdin from the path the last message is written to.
+    """
+    write_guard_context(s, paths)
+    cli.prepare(s, paths)
+    paths["last_message"] = os.path.join(paths["record"], "last-message-%d.md" % s["rounds"])
+    cmd, stdin = command(paths["last_message"])
+    outcome = execute(cli, cmd, s["cwd"], stdin, paths, s["rounds"])
+    cli.after_run(outcome.events, paths["last_message"])
+    lines, warned = report_lines(cli, s, paths, outcome)
     save(os.path.join(paths["record"], "run.json"), s)
     print("\n".join(lines))
-    return 1 if code != 0 else (2 if warned else 0)
+    return 1 if outcome.code != 0 else (2 if warned else 0)
 
 
 def cmd_run(args):
@@ -459,16 +529,12 @@ def cmd_run(args):
     paths = locate(args.task)
     os.makedirs(paths["record"], exist_ok=True)
     os.makedirs(os.path.dirname(paths["report"]), exist_ok=True)
-    keys, network = brief_settings(paths["unit"])
+    keys, network = brief_settings(paths["work_folder"])
     s = {"cli": cli.name, "role": args.role, "kind": ROLES[args.role]["kind"], "model": cli.models[args.role],
          "effort": effort, "network": network, "keys": keys,
          "guard_context": os.path.join(paths["record"], "guard.json"), "session_id": None, "rounds": 1}
-    write_guard_context(s, paths)
-    cli.prepare(s, paths)
-    paths["last_message"] = os.path.join(paths["record"], "last-message-1.md")
     prompt = PROMPT.format(role=os.path.join(ROLES_DIR, args.role + ".md"), spec=paths["spec"], report=paths["report"])
-    cmd, stdin = cli.run_command(s, paths["last_message"], prompt)
-    return finish(cli, s, paths, *execute(cli, cmd, s["cwd"], stdin, paths, 1))
+    return launch(cli, s, paths, lambda last_message: cli.run_command(s, last_message, prompt))
 
 
 def cmd_resume(args):
@@ -485,14 +551,182 @@ def cmd_resume(args):
         raise Fail("The message file `%s` is empty or cannot be read." % args.message)
     cli = CLIS[s["cli"]]()
     # The brief may have changed since the first run, for example with a key the user approved.
-    s["keys"], s["network"] = brief_settings(paths["unit"])
+    s["keys"], s["network"] = brief_settings(paths["work_folder"])
     s["guard_context"] = s.get("guard_context") or os.path.join(paths["record"], "guard.json")
-    write_guard_context(s, paths)
-    cli.prepare(s, paths)
     s["rounds"] = int(s.get("rounds", 1)) + 1
-    paths["last_message"] = os.path.join(paths["record"], "last-message-%d.md" % s["rounds"])
-    cmd, stdin = cli.resume_command(s, paths["last_message"], message)
-    return finish(cli, s, paths, *execute(cli, cmd, s["cwd"], stdin, paths, s["rounds"]))
+    return launch(cli, s, paths, lambda last_message: cli.resume_command(s, last_message, message))
+
+
+# ---------------------------------------------------------------- following a run
+
+BASH_WRAP = re.compile(r"^\S*\b(?:ba|z)?sh -l?c (['\"])(.*)\1$", re.S)
+
+
+class EventReader:
+    """Turns a run's event stream, codex or agy, into lines for a person to follow."""
+
+    def __init__(self):
+        self.agy_text = {}  # agy streams a message in pieces, by step
+
+    def lines(self, event):
+        if not isinstance(event, dict):
+            return []
+        if "event" in event:
+            return self.agy(event)
+        return self.codex(event)
+
+    def codex(self, e):
+        kind, item = e.get("type"), e.get("item") if isinstance(e.get("item"), dict) else {}
+        it = item.get("type")
+        if kind == "thread.started":
+            return ["start  session %s" % e.get("thread_id")]
+        if kind == "turn.completed":
+            u = e.get("usage") or {}
+            return ["end    tokens in %s, out %s" % (format(u.get("input_tokens", 0), ","), format(u.get("output_tokens", 0), ","))]
+        if kind in ("turn.failed", "error"):
+            return ["ERROR  %s" % short(json.dumps(e.get("error") or e.get("message") or e, ensure_ascii=False))]
+        if kind == "item.started" and it == "command_execution":
+            m = BASH_WRAP.match(item.get("command") or "")
+            return ["$      %s" % short(m.group(2) if m else item.get("command"))]
+        if kind != "item.completed":
+            return []
+        if it == "agent_message":
+            return ["say    %s" % short(item.get("text"), 400)]
+        if it == "reasoning":
+            return ["think  %s" % short(item.get("text"), 200)]
+        if it == "command_execution" and item.get("exit_code") not in (0, None):
+            return ["       exit %s" % item.get("exit_code")]
+        if it == "file_change":
+            return ["edit   %s" % ", ".join("%s %s" % (ch.get("kind", ""), ch.get("path", "")) for ch in item.get("changes") or [])]
+        if it == "todo_list":
+            return ["plan   %s" % "; ".join(("[x] " if t.get("completed") else "[ ] ") + short(t.get("text"), 60) for t in item.get("items") or [])]
+        if it in ("mcp_tool_call", "web_search"):
+            return ["tool   %s %s" % (it, short(item.get("query") or item.get("tool") or "", 120))]
+        return []
+
+    def agy(self, e):
+        kind = e.get("event")
+        if kind == "init":
+            return ["start  conversation %s, %s" % (e.get("conversation_id"), (e.get("init") or {}).get("model", ""))]
+        if kind == "result":
+            r = e.get("result") or {}
+            u = r.get("usage") or {}
+            return ["end    %s, tokens in %s, out %s" % (r.get("status"), format(u.get("input_tokens", 0), ","), format(u.get("output_tokens", 0), ","))]
+        step = e.get("step_update") if isinstance(e.get("step_update"), dict) else {}
+        kind, state, index = step.get("step_type"), step.get("state"), step.get("step_index")
+        if kind == "agent_response":
+            self.agy_text[index] = self.agy_text.get(index, "") + str(step.get("text_delta") or "")
+            if state == "DONE":
+                text = self.agy_text.pop(index, "").strip()
+                return ["say    %s" % short(text, 400)] if text else []
+            return []
+        if kind == "tool" and state == "ACTIVE":
+            info = step.get("tool_info") or {}
+            params = info.get("parameters") if isinstance(info.get("parameters"), dict) else {}
+            name = step.get("tool_name") or info.get("name") or "?"
+            if params.get("CommandLine"):
+                return ["$      %s" % short(params["CommandLine"])]
+            target = next((params[k] for k in worker_guard.AGY_TARGET_KEYS if params.get(k)), "")
+            return ["%-6s %s" % ("edit" if worker_guard.WRITE_TOOL.search(name) else "tool", short("%s %s" % (name, target)))]
+        if state not in (None, "ACTIVE", "DONE"):
+            return ["%-6s step %s %s %s" % ("ERROR" if "ERR" in str(state) else "", index, kind, state)]
+        return []
+
+
+def activity_line(r):
+    return "%-6s %s %s" % ("GUARD" if r.get("refused") else "call", r.get("tool"), short(called(r) or r.get("target") or ""))
+
+
+class Tail:
+    """New complete lines of a file, as JSON, each time it is read."""
+
+    def __init__(self, path):
+        self.path, self.pos, self.rest = path, 0, ""
+
+    def read(self):
+        try:
+            with open(self.path, encoding="utf-8", errors="replace") as f:
+                f.seek(self.pos)
+                chunk = f.read()
+                self.pos = f.tell()
+        except OSError:
+            return []
+        parts = (self.rest + chunk).split("\n")
+        self.rest = parts.pop()
+        out = []
+        for line in parts:
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                pass
+        return out
+
+
+def latest_round(record):
+    """The number of the newest round that has an event stream, or None."""
+    try:
+        names = os.listdir(record)
+    except OSError:
+        return None
+    rounds = [int(m.group(1)) for m in (re.match(r"events-(\d+)\.jsonl$", name) for name in names) if m]
+    return max(rounds) if rounds else None
+
+
+def run_ended(record, round_no, since):
+    """The script writes run.json when a run is over."""
+    try:
+        if os.path.getmtime(os.path.join(record, "run.json")) < since:
+            return False
+        with open(os.path.join(record, "run.json"), encoding="utf-8") as f:
+            return int(json.load(f).get("rounds", 1)) >= round_no
+    except (OSError, ValueError):
+        return False
+
+
+def cmd_watch(args):
+    """Follow a run for the user. The conductor does not run this: it waits for the run's report."""
+    paths = locate(args.task)
+    record, out = paths["record"], sys.stdout
+    round_no = args.round
+    while round_no is None:
+        round_no = latest_round(record)
+        if round_no is None:
+            if not args.follow:
+                raise Fail("No run of %s has started yet." % paths["task"])
+            time.sleep(1)
+    events_path = os.path.join(record, "events-%d.jsonl" % round_no)
+    try:
+        with open(os.path.join(record, "live.json"), encoding="utf-8") as f:
+            live = json.load(f)
+        round_start = float(live["started"]) if int(live.get("round", 0)) == round_no else 0
+    except (OSError, ValueError, KeyError, TypeError):
+        round_start = 0
+    events, guard = Tail(events_path), Tail(os.path.join(record, "activity.jsonl" if args.calls else "guard.jsonl"))
+    reader = EventReader()
+    out.write("%s %s, round %d.%s\n" % ("Following" if args.follow else "Showing", paths["task"], round_no, " Ctrl-C to stop." if args.follow else ""))
+
+    def local(line):
+        return line.replace(paths["project"] + os.sep, "")
+
+    while True:
+        now = time.strftime("%H:%M:%S")
+        for r in guard.read():
+            if r.get("fault") or r.get("at", 0) < round_start:
+                continue
+            stamp = time.strftime("%H:%M:%S", time.localtime(r["at"]))
+            out.write("%s  %s\n" % (stamp, local(activity_line(r) if args.calls else "GUARD  " + refusal(r, 100))))
+        for e in events.read():
+            for line in reader.lines(e):
+                if args.calls and line.startswith(("$", "edit ", "tool ")):
+                    continue  # the guard's log already shows the calls
+                out.write("%s  %s\n" % (now if args.follow else "--:--:--", local(line)))
+        out.flush()
+        if not args.follow:
+            return 0
+        if run_ended(record, round_no, round_start):
+            out.write("The run is over. The conductor reviews it before anyone reads the report.\n")
+            return 0
+        time.sleep(1)
 
 
 def main(argv=None):
@@ -506,8 +740,18 @@ def main(argv=None):
     resume = sub.add_parser("resume", help="continue the task's last session with a review comment")
     resume.add_argument("--task", required=True)
     resume.add_argument("--message", required=True, help="a file with the review comment")
+    watch = sub.add_parser("watch", help="follow a run as it goes, for the user")
+    watch.add_argument("--task", required=True)
+    watch.add_argument("--round", type=int, help="the round to show; the latest by default")
+    watch.add_argument("--no-follow", dest="follow", action="store_false", help="print what is there and stop")
+    watch.add_argument("--calls", action="store_true", help="show every call as the guard saw it, with its time")
     args = parser.parse_args(argv)
     try:
+        if args.command == "watch":
+            try:
+                return cmd_watch(args)
+            except KeyboardInterrupt:
+                return 0
         return cmd_run(args) if args.command == "run" else cmd_resume(args)
     except Fail as e:
         print("ERROR: %s" % e)

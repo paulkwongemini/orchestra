@@ -9,7 +9,7 @@ import tempfile
 import time
 
 PLUGIN = "orchestra"
-WORKDIR = ".orchestra"
+ORCHESTRA_DIR = ".orchestra"
 TAG = "[orchestra] "
 CONDUCTOR_SKILL = PLUGIN + ":conductor"
 DELEGATION_SKILL = PLUGIN + ":delegation"
@@ -135,6 +135,39 @@ def roster_text():
     return ", ".join("`%s:%s`" % (PLUGIN, name) for name in ROSTER)
 
 
+# ---------------------------------------------------------------- per-session records
+#
+# Each record is a small file of its own, `<state>/sessions/<session id><suffix>`, so that two
+# hooks running at once never rewrite each other's record.
+
+def _state_file(data, suffix):
+    folder = os.path.join(state_dir(), "sessions")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + suffix)
+
+
+def _read_state(data, suffix):
+    """The text of a record, or None when there is no record or it is empty."""
+    try:
+        with open(_state_file(data, suffix), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def _write_state(data, suffix, text):
+    """Write a record, or remove it with None. An empty text leaves a file whose time is the record."""
+    path = _state_file(data, suffix)
+    try:
+        if text is not None:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+        elif os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------- which model the main conversation runs on
 #
 # The harness applies only while the user has turned conductor mode on and the main
@@ -148,38 +181,39 @@ _ASSISTANT = re.compile(r'"type":\s*"assistant"')
 _REQUEST = re.compile(r'"type":\s*"api-request"\s*[,}]')
 
 
-def _epoch(text):
+def epoch(text):
+    """An ISO timestamp as seconds, or None."""
     try:
         return datetime.datetime.fromisoformat(str(text).replace("Z", "+00:00")).timestamp()
     except ValueError:
         return None
 
 
-def transcript_signals(path, max_bytes=16 * 1024 * 1024):
-    """Read the end of the transcript.
+def _transcript_entries(path, max_bytes=16 * 1024 * 1024):
+    """The requests and the main conversation's responses in a transcript, newest first.
 
-    Returns (model of the last response in the main conversation, when it was written,
-    model of the newest request sent after that response). Any of them can be None.
+    Reads a window at the end of the file and widens it for as long as the caller keeps asking,
+    up to `max_bytes`.
     """
     try:
         size = os.path.getsize(path)
     except (OSError, TypeError):
-        return None, None, None
-    window = 256 * 1024
+        return
+    window, end = 256 * 1024, size
     while True:
         start = max(0, size - window)
         try:
             with open(path, "rb") as f:
                 f.seek(start)
-                lines = f.read().decode("utf-8", "replace").split("\n")
+                lines = f.read(end - start).split(b"\n")
         except OSError:
-            return None, None, None
+            return
         if start > 0:
-            lines = lines[1:]  # the first line may be cut in half
-        in_flight = None
-        for line in reversed(lines):
-            is_request = _REQUEST.search(line)
-            if not is_request and not _ASSISTANT.search(line):
+            end = start + len(lines[0])  # the first line may be cut in half: the next window reads it whole
+            lines = lines[1:]
+        for raw in reversed(lines):
+            line = raw.decode("utf-8", "replace")
+            if not _REQUEST.search(line) and not _ASSISTANT.search(line):
                 continue
             try:
                 entry = json.loads(line)
@@ -187,42 +221,44 @@ def transcript_signals(path, max_bytes=16 * 1024 * 1024):
                 continue
             if not isinstance(entry, dict):
                 continue
-            if entry.get("type") == "api-request":
-                params = entry.get("params")
-                if in_flight is None and isinstance(params, dict) and params.get("model"):
-                    in_flight = str(params["model"])
-            elif entry.get("type") == "assistant" and not entry.get("isSidechain"):
-                message = entry.get("message")
-                model = message.get("model") if isinstance(message, dict) else None
-                if model and not str(model).startswith("<"):
-                    return str(model), _epoch(entry.get("timestamp")), in_flight
+            if entry.get("type") == "api-request" or (entry.get("type") == "assistant" and not entry.get("isSidechain")):
+                yield entry
         if start == 0 or window >= max_bytes:
-            return None, None, in_flight
+            return
         window *= 4
 
 
-def _session_file(data):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".json")
+def transcript_signals(path):
+    """Read the end of the transcript.
+
+    Returns (model of the last response in the main conversation, when it was written,
+    model of the newest request sent after that response). Any of them can be None.
+    """
+    in_flight = None
+    for entry in _transcript_entries(path):
+        if entry["type"] == "api-request":
+            params = entry.get("params")
+            if in_flight is None and isinstance(params, dict) and params.get("model"):
+                in_flight = str(params["model"])
+            continue
+        message = entry.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if model and not str(model).startswith("<"):
+            return str(model), epoch(entry.get("timestamp")), in_flight
+    return None, None, in_flight
 
 
 def record_switch(data, model):
     """PostModelSwitch: remember the model the session switched to."""
-    try:
-        with open(_session_file(data), "w", encoding="utf-8") as f:
-            json.dump({"model": str(model or ""), "at": time.time()}, f)
-    except OSError:
-        pass
+    _write_state(data, ".json", json.dumps({"model": str(model or ""), "at": time.time()}))
 
 
 def _load_switch(data):
     try:
-        with open(_session_file(data), encoding="utf-8") as f:
-            switch = json.load(f)
-        return switch if isinstance(switch, dict) else None
-    except (OSError, ValueError):
+        switch = json.loads(_read_state(data, ".json") or "")
+    except ValueError:
         return None
+    return switch if isinstance(switch, dict) else None
 
 
 def main_model(data):
@@ -244,83 +280,45 @@ def main_model_can_conduct(data):
     return None if model is None else is_conductor_model(model)
 
 
-def main_effort(data, max_bytes=16 * 1024 * 1024):
+def main_effort(data):
     """The effort level of the main conversation's newest request or response, lower case, or None.
 
     Each request records the effort it was sent with, before its response and tool calls exist,
     so a hook sees the effort that is in force for the call it is judging.
     """
-    path = data.get("transcript_path")
-    try:
-        size = os.path.getsize(path)
-    except (OSError, TypeError):
-        return None
-    window = 256 * 1024
-    while True:
-        start = max(0, size - window)
-        try:
-            with open(path, "rb") as f:
-                f.seek(start)
-                lines = f.read().decode("utf-8", "replace").split("\n")
-        except OSError:
-            return None
-        if start > 0:
-            lines = lines[1:]
-        for line in reversed(lines):
-            if not _REQUEST.search(line) and not _ASSISTANT.search(line):
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(entry, dict):
-                continue
-            effort = None
-            if entry.get("type") == "api-request":
-                params = entry.get("params")
-                config = params.get("output_config") if isinstance(params, dict) else None
-                effort = config.get("effort") if isinstance(config, dict) else None
-            elif entry.get("type") == "assistant" and not entry.get("isSidechain"):
-                effort = entry.get("effort")
-            if effort:
-                return str(effort).strip().lower()
-        if start == 0 or window >= max_bytes:
-            return None
-        window *= 4
+    for entry in _transcript_entries(data.get("transcript_path")):
+        if entry["type"] == "api-request":
+            params = entry.get("params")
+            config = params.get("output_config") if isinstance(params, dict) else None
+            effort = config.get("effort") if isinstance(config, dict) else None
+        else:
+            effort = entry.get("effort")
+        if effort:
+            return str(effort).strip().lower()
+    return None
 
 
-# The conductor's modes. In `claude` the workers are Claude subagents and the hooks guard the
-# work. In the CLI modes the workers are runs of another vendor's CLI, and the hooks step
-# aside: the conductor keeps the rules by its instructions alone.
+# ---------------------------------------------------------------- the session's mode and what it has done
+#
+# Conductor mode is on when the user has turned on one of three worker modes. In `claude` the
+# workers are Claude subagents and the hooks guard the work. In the CLI modes the workers are
+# runs of another vendor's CLI, and the hooks step aside: the conductor keeps the rules by its
+# instructions alone.
 MODES = ("claude", "codex", "agy")
 CLI_MODES = ("codex", "agy")
-
-
-def _mode_file(data):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".mode")
+# The mode each command turns on. `disable` turns conductor mode off.
+COMMAND_MODES = {"conduct": "claude", "conductor": "claude", "conduct-codex": "codex", "conduct-agy": "agy"}
+OFF_COMMAND = "disable"
 
 
 def set_mode(data, mode):
-    """Record the conductor mode the user turned on for this session, or None for off. It is off until turned on."""
-    try:
-        if mode in MODES:
-            with open(_mode_file(data), "w", encoding="utf-8") as f:
-                f.write(mode)
-        elif os.path.exists(_mode_file(data)):
-            os.remove(_mode_file(data))
-    except OSError:
-        pass
+    """Record the worker mode the user turned on for this session, or None for off. It is off until turned on."""
+    _write_state(data, ".mode", mode if mode in MODES else None)
 
 
 def session_mode(data):
-    """The session's conductor mode, or None when it is off."""
-    try:
-        with open(_mode_file(data), encoding="utf-8") as f:
-            mode = f.read().strip()
-    except OSError:
-        return None
+    """The session's worker mode, or None when conductor mode is off."""
+    mode = _read_state(data, ".mode")
     return mode if mode in MODES else None
 
 
@@ -329,54 +327,27 @@ def in_cli_mode(data):
     return session_mode(data) in CLI_MODES
 
 
-def _effort_file(data):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".effort")
-
-
 def effort_asked(data):
     """The low effort level the user was last asked about in this session, or None."""
-    try:
-        with open(_effort_file(data), encoding="utf-8") as f:
-            return f.read().strip() or None
-    except OSError:
-        return None
+    return _read_state(data, ".effort")
 
 
 def mark_effort_asked(data, effort):
     """Record the effort level the user was asked about, or clear the record with None."""
-    try:
-        if effort:
-            with open(_effort_file(data), "w", encoding="utf-8") as f:
-                f.write(effort)
-        elif os.path.exists(_effort_file(data)):
-            os.remove(_effort_file(data))
-    except OSError:
-        pass
+    _write_state(data, ".effort", effort or None)
 
 
-def _loaded_file(data, skill):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    suffix = ".loaded" if skill == CONDUCTOR_SKILL else "." + bare(skill)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + suffix)
+def _loaded_suffix(skill):
+    return ".loaded" if skill == CONDUCTOR_SKILL else "." + bare(skill)
 
 
 def mark_loaded(data, loaded, skill=CONDUCTOR_SKILL):
     """Record that a skill's text is in the context of this session, or no longer is."""
-    try:
-        if loaded:
-            with open(_loaded_file(data, skill), "w"):
-                pass
-        elif os.path.exists(_loaded_file(data, skill)):
-            os.remove(_loaded_file(data, skill))
-    except OSError:
-        pass
+    _write_state(data, _loaded_suffix(skill), "" if loaded else None)
 
 
 def is_loaded(data, skill=CONDUCTOR_SKILL):
-    return os.path.exists(_loaded_file(data, skill))
+    return os.path.exists(_state_file(data, _loaded_suffix(skill)))
 
 
 def is_skill(name, skill):
@@ -385,55 +356,31 @@ def is_skill(name, skill):
     return name in (skill, bare(skill))
 
 
-def _turn_file(data):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".turn")
-
-
 def mark_user_turn(data):
     """Record that the user just said something: a prompt, or an answer to a question."""
-    try:
-        with open(_turn_file(data), "w"):
-            pass
-    except OSError:
-        pass
+    _write_state(data, ".turn", "")
 
 
 def last_user_turn(data):
     """When the user last said something in this session, or None when that was not recorded."""
     try:
-        return os.path.getmtime(_turn_file(data))
+        return os.path.getmtime(_state_file(data, ".turn"))
     except OSError:
         return None
 
 
-def _work_file(data):
-    folder = os.path.join(state_dir(), "sessions")
-    os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".work")
-
-
-def set_active_work(data, unit):
+def set_active_work(data, work_folder):
     """Record the work folder the conductor of this session is working in. The latest record wins."""
-    try:
-        with open(_work_file(data), "w", encoding="utf-8") as f:
-            f.write(os.path.realpath(unit))
-    except OSError:
-        pass
+    _write_state(data, ".work", os.path.realpath(work_folder))
 
 
 def active_work(data):
     """The session's active work folder, or None when none is recorded or it is not a work folder of this project."""
-    try:
-        with open(_work_file(data), encoding="utf-8") as f:
-            unit = f.read().strip()
-    except OSError:
+    work_folder = _read_state(data, ".work")
+    if not work_folder:
         return None
-    if not unit:
-        return None
-    found, rest = split_unit(unit, data)
-    return unit if found == unit and not rest else None
+    found, rest = split_work_folder(work_folder, data)
+    return work_folder if found == work_folder and not rest else None
 
 
 def main_conducts(data):
@@ -453,8 +400,8 @@ def project_dir(data):
     return os.path.realpath(os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd())
 
 
-def work_dir(data):
-    return os.path.join(project_dir(data), WORKDIR)
+def orchestra_dir(data):
+    return os.path.join(project_dir(data), ORCHESTRA_DIR)
 
 
 def resolve(path, data):
@@ -470,13 +417,13 @@ def inside(path, base):
     return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
 
 
-def split_unit(path, data):
+def split_work_folder(path, data):
     """`<project>/.orchestra/<work>/reports/T01.md` -> (`<project>/.orchestra/<work>`, ["reports", "T01.md"]).
 
     Each piece of work has its own folder under `.orchestra/`. Returns (None, []) for a path
     that is not inside one.
     """
-    root = os.path.realpath(work_dir(data))
+    root = os.path.realpath(orchestra_dir(data))
     if not inside(path, root) or path == root:
         return None, []
     parts = os.path.relpath(path, root).split(os.sep)
@@ -485,14 +432,14 @@ def split_unit(path, data):
 
 def in_reports(path, data):
     """True for anything inside a work folder's `reports/` folder."""
-    unit, rest = split_unit(path, data)
-    return unit is not None and bool(rest) and rest[0] == "reports"
+    work_folder, rest = split_work_folder(path, data)
+    return work_folder is not None and bool(rest) and rest[0] == "reports"
 
 
 def in_files(path, data):
     """True for anything inside a work folder's `files/` folder, where tasks keep working files."""
-    unit, rest = split_unit(path, data)
-    return unit is not None and bool(rest) and rest[0] == "files"
+    work_folder, rest = split_work_folder(path, data)
+    return work_folder is not None and bool(rest) and rest[0] == "files"
 
 
 def temp_roots(data):
@@ -515,10 +462,10 @@ def ensure_gitignore(data):
     Create-only: a project that wants to commit these records replaces the file's content,
     and that choice is left alone.
     """
-    root = work_dir(data)
+    root = orchestra_dir(data)
     target = os.path.join(root, ".gitignore")
     try:
-        os.makedirs(root, exist_ok=True)  # the write that follows creates it anyway
+        os.makedirs(root, exist_ok=True)
         if not os.path.exists(target):
             with open(target, "w", encoding="utf-8") as f:
                 f.write("*\n")
@@ -562,14 +509,14 @@ def empty_sections(text, headings):
     return [h for h in headings if section_body(text, h) == ""]
 
 
-def brief_unit(path, data):
+def brief_work_folder(path, data):
     """The work folder for `<project>/.orchestra/<work>/brief.md`, or None for any other path."""
-    unit, rest = split_unit(path, data)
-    return unit if rest == ["brief.md"] else None
+    work_folder, rest = split_work_folder(path, data)
+    return work_folder if rest == ["brief.md"] else None
 
 
 PREAPPROVAL_KEYS = ("data", "deps", "git", "push", "github", "http", "ssh", "deploy")
-PREAPPROVAL_SECTION = "Decision rights"
+DECISION_RIGHTS = "Decision rights"
 _PREAPPROVED = re.compile(
     r"^[ \t]*(?:[-*+][ \t]+|\d+[.)][ \t]+)?[*_`]*pre[- ]?approved[*_`]*[ \t]*[:：][*_`]*(.*)$",
     re.I | re.M,
@@ -578,7 +525,7 @@ _PREAPPROVED = re.compile(
 
 def preapproved_keys(text):
     """The keys on the `Pre-approved:` line under `## Decision rights`. Other words are ignored."""
-    body = section_body(text, PREAPPROVAL_SECTION)
+    body = section_body(text, DECISION_RIGHTS)
     keys = set()
     for m in _PREAPPROVED.finditer(body or ""):
         for word in re.split(r"[\s,，、]+", m.group(1)):
@@ -600,7 +547,7 @@ _GLOB = re.compile(r"[*?\[]")
 
 def conductor_write_entries(text):
     """The entries on the `Conductor writes:` lines under `## Decision rights`, as written."""
-    body = section_body(text, PREAPPROVAL_SECTION)
+    body = section_body(text, DECISION_RIGHTS)
     entries = []
     for m in _CONDUCTOR_WRITES.finditer(body or ""):
         # Only commas separate entries, because a path may contain a space.
@@ -630,7 +577,7 @@ def conductor_write_file(entry, data):
             return None
     except (OSError, ValueError):
         return None
-    if p == root or not inside(p, root) or inside(p, work_dir(data)):
+    if p == root or not inside(p, root) or inside(p, orchestra_dir(data)):
         return None
     return p
 
@@ -643,6 +590,71 @@ def conductor_write_files(text, data):
         if p:
             files.add(p)
     return files
+
+
+class Approval:
+    """What a work folder's brief pre-approves, and which project files it lets the conductor write.
+
+    state: `no-work` (no work folder), `no-brief`, `no-turn` (no user turn recorded), `newer`
+    (the brief changed after the user last spoke), or `confirmed`. `listed` and `listed_files`
+    are what the brief says. `keys` and `files` are what counts, and they are empty unless the
+    state is `confirmed`.
+    """
+
+    def __init__(self, work_folder, listed, state, listed_files=frozenset()):
+        self.work_folder = work_folder
+        self.listed = listed
+        self.state = state
+        self.keys = listed if state == "confirmed" else set()
+        self.listed_files = listed_files
+        self.files = listed_files if state == "confirmed" else frozenset()
+
+    @property
+    def shown(self):
+        return "`.orchestra/%s/brief.md`" % os.path.basename(self.work_folder) if self.work_folder else "`.orchestra/<work>/brief.md`"
+
+    @property
+    def unconfirmed(self):
+        """Why the user has not confirmed this version of the brief, in the `newer` and `no-turn` states."""
+        because = ("it was written or changed after the user last spoke" if self.state == "newer"
+                   else "no user turn is recorded for this session")
+        return because + ", so the user has not confirmed this version of the brief"
+
+
+def read_approval(work_folder, data, turn, changed=None):
+    """The approval that a work folder's brief gives, for a user who last spoke at `turn`.
+
+    `changed` is when the brief last changed. By default it is the file's own time.
+    """
+    if work_folder is None:
+        return Approval(None, set(), "no-work")
+    brief = os.path.join(work_folder, "brief.md")
+    if not os.path.isfile(brief):
+        return Approval(work_folder, set(), "no-brief")
+    text = read_text(brief)
+    listed = preapproved_keys(text)
+    files = frozenset(conductor_write_files(text, data))
+    if changed is None:
+        # Read the time after the text, so a change in between counts as unconfirmed.
+        try:
+            changed = os.path.getmtime(brief)
+        except OSError:
+            return Approval(work_folder, set(), "no-brief")
+    # Stricter than check_brief in guard_agent.py, which lets a brief through when no user turn
+    # is recorded. A pre-approved action runs with nobody present to confirm it, so it must not
+    # be approved because a record is missing.
+    if turn is None:
+        state = "no-turn"
+    elif changed > turn:
+        state = "newer"
+    else:
+        state = "confirmed"
+    return Approval(work_folder, listed, state, files)
+
+
+def brief_approval(data):
+    """The approval of the brief in the session's active work folder."""
+    return read_approval(active_work(data), data, last_user_turn(data))
 
 
 _STATUS_LINE = re.compile(r"^\W*STATUS\W*[:：]\s*\W*([A-Za-z]+)", re.I)
@@ -670,36 +682,42 @@ def safe_name(text):
 
 
 def prune_state(max_age_days=30):
-    """Drop per-session records that are older than a month."""
+    """Drop records that are older than a month: the per-session ones, and the marks that
+    check_report.py leaves for a subagent that never stopped cleanly.
+
+    What is recorded about a report (`meta/`) is kept, because the report it describes stays in
+    the project and may be read at any later time.
+    """
     cutoff = time.time() - max_age_days * 86400
-    folder = os.path.join(state_dir(), "sessions")
-    try:
-        for entry in os.scandir(folder):
-            if entry.is_file() and entry.stat().st_mtime < cutoff:
-                os.remove(entry.path)
-    except OSError:
-        pass
+    base = state_dir()
+    for folder, prefixes in ((os.path.join(base, "sessions"), ("",)), (base, ("handback-", "attempts-"))):
+        try:
+            for entry in os.scandir(folder):
+                if entry.is_file() and entry.name.startswith(prefixes) and entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
+        except OSError:
+            pass
 
 
-def _meta_path(data, unit, tid):
-    digest = hashlib.sha1(os.path.realpath(unit).encode("utf-8")).hexdigest()[:12]
+def _meta_path(work_folder, tid):
+    digest = hashlib.sha1(os.path.realpath(work_folder).encode("utf-8")).hexdigest()[:12]
     folder = os.path.join(state_dir(), "meta", digest)
     os.makedirs(folder, exist_ok=True)
     return os.path.join(folder, safe_name(tid) + ".json")
 
 
-def save_meta(data, unit, tid, meta):
+def save_meta(data, work_folder, tid, meta):
     """Record which kind of subagent filed a report. Kept outside the project."""
     try:
-        with open(_meta_path(data, unit, tid), "w", encoding="utf-8") as f:
+        with open(_meta_path(work_folder, tid), "w", encoding="utf-8") as f:
             json.dump(meta, f)
     except OSError:
         pass
 
 
-def load_meta(data, unit, tid):
+def load_meta(data, work_folder, tid):
     try:
-        with open(_meta_path(data, unit, tid), encoding="utf-8") as f:
+        with open(_meta_path(work_folder, tid), encoding="utf-8") as f:
             meta = json.load(f)
         return meta if isinstance(meta, dict) else {}
     except (OSError, ValueError):

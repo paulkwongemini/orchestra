@@ -1,5 +1,7 @@
 ---
+name: agy
 description: The facts of the Antigravity CLI (agy) for a conductor in agy mode, with the Gemini model each worker role runs on. Load it after orchestra:cli-workers once the user has turned agy mode on with /orchestra:conduct-agy.
+user-invocable: false
 ---
 
 # agy workers
@@ -13,7 +15,7 @@ description: The facts of the Antigravity CLI (agy) for a conductor in agy mode,
 | `engineer`, `analyst` | Gemini 4 Neon, the deeper reasoner |
 | `implementer`, `writer` | Gemini 4 Hydrogen, lighter and faster |
 
-The efforts are `low`, `medium`, `high` and `xhigh`; agy names the effort in the model id, as in `gemini-4-neon-high`. `xhigh` is the top level, so an analysis that would go to `max` on Codex goes to `xhigh` here. The user does not use Gemini 4 Argon.
+The efforts are `low`, `medium`, `high` and `xhigh`; agy names the effort in the model id, as in `gemini-4-neon-high`. `xhigh` is the top level, so an analysis that would go to `max` on Codex goes to `xhigh` here. Gemini 4 Argon is not used.
 
 ## What a run has
 
@@ -23,10 +25,11 @@ The efforts are `low`, `medium`, `high` and `xhigh`; agy names the effort in the
 - **Network.** Open through an allow rule, `read_url(*)`, unless the brief's `## Constraints` says `Worker network: blocked`. Then the sandbox blocks it.
 - **The guard** sees shell commands as `run_command` and file writes as `write_file` and similar tools. It refuses any request to leave the sandbox, since nobody is there to approve it.
 - **Instructions it reads by itself:** the project's `AGENTS.md` and `.agents/hooks.json` when the project is added for writing, so the user's own project hooks run too. An `analyst`, which reads the project without adding it, does not get the project's `AGENTS.md`: put the rules it needs into the task spec.
+- **Output.** The script runs agy with `--output-format stream-json`, so the run's events reach its record as they happen and `worker.py watch` can show them. The last event, `result`, holds the worker's last message, the status and the tokens.
 - **Resume** with `--conversation` keeps the conversation and the workspace. The script passes the same settings again.
 - **Cost.** A short run reads about 15,700 input tokens, with about 18,000 more read from cache.
 
 ## Not known yet
 
 - How a run ends when the user's Gemini plan reaches its limit. The script warns when the output mentions a usage limit.
-- Turning off the user's agy plugins and skills for one run. This machine has none. `--disable-slash-commands` keeps a prompt from expanding into a skill.
+- How to turn off the user's agy plugins and skills for one run. The script does not. `--disable-slash-commands` keeps a prompt from expanding into a skill.

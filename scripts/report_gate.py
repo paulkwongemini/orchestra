@@ -22,8 +22,8 @@ import common as c  # noqa: E402
 MIN_EVIDENCE = 20  # minimum length of the text under the evidence heading
 
 
-def find_review(unit, tid):
-    folder = os.path.join(unit, "reviews")
+def find_review(work_folder, tid):
+    folder = os.path.join(work_folder, "reviews")
     try:
         names = [n for n in os.listdir(folder) if n.endswith(".md") and c.task_id(n) == tid]
     except OSError:
@@ -70,7 +70,7 @@ def main():
         target = ti.get("path")
         if target and c.in_reports(c.resolve(target, data), data):
             c.deny(
-                "Do not search a reports folder (Principle 7). Write the review record first, "
+                "Do not search a reports folder. Write the review record first, "
                 "then open the report with the Read tool."
             )
         c.allow()
@@ -79,30 +79,30 @@ def main():
     if not target:
         c.allow()
     path = c.resolve(target, data)
-    brief_of = c.brief_unit(path, data)
+    brief_of = c.brief_work_folder(path, data)
     if brief_of:
         c.set_active_work(data, brief_of)
     if not c.in_reports(path, data) or not os.path.isfile(path):
         c.allow()
 
-    unit, _rest = c.split_unit(path, data)
+    work_folder, _rest = c.split_work_folder(path, data)
     tid = c.task_id(path)
     if c.read_status(path) in ("BLOCKED", "FAILED"):
         c.allow()
-    if c.load_meta(data, unit, tid).get("kind") == "readonly":
+    if c.load_meta(data, work_folder, tid).get("kind") == "readonly":
         c.allow()
 
-    problems = review_problems(find_review(unit, tid), path)
+    problems = review_problems(find_review(work_folder, tid), path)
     if not problems:
         c.allow()
     c.deny(
-        "Review the result independently before reading the report (Principle 7). "
+        "Review the result independently before reading the report. "
         "1) Review the result on its own: read the diff, run the verification commands yourself, "
         "and check the acceptance criteria in the task spec. "
         "2) Write the review record at `.orchestra/%s/reviews/%s.md`. Required sections: %s. "
         "3) Then open the report again. "
         "Current problem: %s"
-        % (os.path.basename(unit), tid, ", ".join("## " + h for h in c.REVIEW_HEADINGS), " ".join(problems))
+        % (os.path.basename(work_folder), tid, ", ".join("## " + h for h in c.REVIEW_HEADINGS), " ".join(problems))
     )
 
 

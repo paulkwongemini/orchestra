@@ -70,11 +70,11 @@ Close a group when every task in it has passed review. Work from the result, not
    2. **What did the group make unnecessary?** A plan item or a spec section that the group implemented is in the code now, so it is deleted. If part of it is a fact that passes the test, that part stays, or moves to a comment, and the rest goes.
    3. **What does the group know that the code does not show?** Each fact from the brief or the decision log that will still be true after this work, passes the test, and is not yet in a comment or a document goes where the table says.
 3. If all three answers are empty, write `- [G1] Closed. Documents: no change.` in the decision log. The group is closed, and there is no docs task.
-4. When every file that needs a change is on the brief's `Conductor writes:` line, make the changes yourself, as "Files you write yourself" in your instructions describes. Before you delete document text, confirm that git tracks the file, as item 5 says. Apply the checks under "When you review a docs task" to your own diff. Then write `- [G1] Closed. Documents written by the conductor: README.md.` in the decision log, with the files you changed. There is no docs task.
-5. Otherwise write a docs task spec for the group. It is one more task in that group, with its own task ID.
+4. Before any document text is deleted, by you or by a subagent, confirm that git tracks the file: `git ls-files --error-unmatch <path>`. Git is what keeps the old text. If the file is not tracked, do not delete from it. Ask the user.
+5. When every file that needs a change is on the brief's `Conductor writes:` line, make the changes yourself, as "Files you write yourself" in your instructions describes. Apply the checks under "When you review a docs task" to your own diff. Then write `- [G1] Closed. Documents written by the conductor: README.md.` in the decision log, with the files you changed. There is no docs task.
+6. Otherwise write a docs task spec for the group. It is one more task in that group, with its own task ID.
    - Under `## Scope and limits`, list each file, each statement in it, and what happens to the statement: it is deleted, or it is rewritten to say a thing that you state. You decide what the document says. The subagent writes it. End the list with "Create no other document."
    - Under `## Acceptance criteria`, add a check for each change. For a removed name, a search that must find nothing is enough, for example `grep -rn "old_name" README.md docs/`.
-   - Before the spec has a subagent delete document text, confirm that git tracks the file: `git ls-files --error-unmatch <path>`. Git is what keeps the old text. If the file is not tracked, do not delete from it. Ask the user.
    - Choose the subagent by `orchestra:delegation`, delegate, and review. When the task passes review, add it to the group's line and write `- [G1] Closed. Docs task T04.` in the decision log.
 
 ## When you review a docs task

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""SessionStart, PostModelSwitch, the user's prompts and answers: keep track of whether the session is in conductor mode and of when the user last spoke, and tell the main conversation.
+"""SessionStart, PostModelSwitch, the user's prompts and answers: record the session's mode and
+when the user last spoke, and tell the main conversation which mode applies.
 
 Conductor mode is off when a session starts. The user turns on one mode for the session:
-`claude` with `/orchestra:conduct`, `/orchestra:enable` or `/orchestra:conductor`, `codex` with
+`claude` with `/orchestra:conduct` or `/orchestra:conductor`, `codex` with
 `/orchestra:conduct-codex`, and `agy` with `/orchestra:conduct-agy`. `/orchestra:disable`
 turns it off. In the `claude` mode, the harness applies when the main conversation runs on a
 Fable or an Opus model. On any other model the session is an ordinary one, and the guards leave
@@ -63,20 +64,12 @@ SWITCH_OFF = (
     "</orchestra>"
 )
 
-# The mode each command turns on. `disable` turns the mode off.
-COMMAND_MODES = {
-    "conduct": "claude",
-    "enable": "claude",
-    "conductor": "claude",
-    "conduct-codex": "codex",
-    "conduct-agy": "agy",
-}
-COMMANDS = tuple(COMMAND_MODES) + ("disable",)
+COMMANDS = tuple(c.COMMAND_MODES) + (c.OFF_COMMAND,)
 COMMAND = re.compile(r"^\s*/%s:(%s)(?:\s|$)" % (c.PLUGIN, "|".join(re.escape(n) for n in COMMANDS)))
 
 
 def command_of(data):
-    """The orchestra command the user typed, if any: a key of COMMAND_MODES, or disable."""
+    """The orchestra command the user typed, if any: a key of `c.COMMAND_MODES`, or `disable`."""
     name = str(data.get("command_name") or "")
     if name:
         name = name.lstrip("/")
@@ -103,10 +96,10 @@ def main():
         c.mark_user_turn(data)
         # Only a command the user types turns conductor mode on or off for the session.
         command = command_of(data)
-        if command == "disable":
+        if command == c.OFF_COMMAND:
             c.set_mode(data, None)
-        elif command in COMMAND_MODES:
-            c.set_mode(data, COMMAND_MODES[command])
+        elif command in c.COMMAND_MODES:
+            c.set_mode(data, c.COMMAND_MODES[command])
             c.mark_effort_asked(data, None)  # turning a mode on asks about a low effort again
         if command == "conductor":
             c.mark_loaded(data, True)  # the command puts the skill's text into the conversation

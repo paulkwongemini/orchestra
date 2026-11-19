@@ -6,9 +6,9 @@ user-invocable: false
 
 # Choosing the subagent and the effort level
 
-These rules select the model and effort of the Opus and Sonnet subagents that carry out tasks. Work that meets the conditions under "Haiku calls" in your instructions is not a task: it goes to a Haiku subagent directly, with no task spec and none of the steps below. Check that first, for every piece of work. The user sets the conductor's effort directly in the UI, using the control below the prompt input, whether the conductor runs on Fable or on Opus. Orchestra does not change the conductor's effort.
+These rules select the model and effort of the Opus and Sonnet subagents that carry out tasks. Work that meets the conditions under "Haiku calls" in your instructions is not a task: it goes to a Haiku subagent directly, with no task spec and none of the steps below. Check that first, for every piece of work.
 
-Use this before every task's initial delegation and again for its second rework round, using the current task spec and review history. The first rework round goes back to the same subagent with its model and effort unchanged; it needs no new selection. Decide in three steps: the kind of work, then the model, then the effort level. Do not pick by how hard the task feels. Answer the questions below from the task spec and review history.
+Choose before a task's first delegation, and again before its second rework round. The first rework round goes back to the same subagent with its model and effort unchanged, so it needs no choice. Decide in three steps: the kind of work, then the model, then the effort level. Do not pick by how hard the task feels. Answer the questions below from the task spec and, for a rework, the review history.
 
 ## Step 1. The kind of work
 
@@ -50,7 +50,7 @@ Each subagent has a default. Pass `effort` on the Agent call only when a row bel
 | `high` | No Opus rule from step 2 applies, and the approach is already decided, but completing the task takes many implementation and verification steps. Or the task spec leaves small choices that do not reach beyond the edited files. A mechanical one-step change repeated across files still uses `low` |
 | `xhigh`, `max` | Do not use. Give the task to `orchestra:opus-engineer` instead |
 
-Why: at `low`, Sonnet keeps its thinking short and sometimes reports a change as done without running a check, so `low` needs an exact check in the task spec. At `low` and `medium` on long tasks it is more likely to stop and ask before the work is done, so long tasks that still qualify for Sonnet go to `high`. At `xhigh` and `max` it starts its own rounds of review and makes related fixes that nobody asked for.
+Reason: at `low`, Sonnet keeps its thinking short and sometimes reports a change as done without running a check, so `low` needs an exact check in the task spec. At `low` and `medium` on long tasks it is more likely to stop and ask before the work is done, so long tasks that still qualify for Sonnet go to `high`. At `xhigh` and `max` it starts its own rounds of review and makes related fixes that nobody asked for.
 
 ### `orchestra:opus-engineer`, default `medium`
 
@@ -62,7 +62,7 @@ Why: at `low`, Sonnet keeps its thinking short and sometimes reports a change as
 | `xhigh` | The second rework round only: the task failed review at `high`, and the task spec was not the cause. Start a new subagent |
 | `max` | Do not use |
 
-Why: Opus at `medium` already performs at the level where earlier Opus models needed `high`, in fewer steps and with fewer tokens. Above `high` it thinks much longer for a gain that has to be measured, so `xhigh` is kept for a task that has already failed.
+Reason: Opus at `medium` already performs at the level where earlier Opus models needed `high`, in fewer steps and with fewer tokens. Above `high` it thinks much longer for a gain that has to be measured, so `xhigh` is kept for a task that has already failed.
 
 ### `orchestra:opus-analyst`, default `high`
 
@@ -84,9 +84,7 @@ Why: Opus at `medium` already performs at the level where earlier Opus models ne
 
 ## Record the choice
 
-Before the initial delegation and before reassignment for the second rework round, write one line in `.orchestra/<work>/decisions.md` with the task ID, chosen subagent, model, effective effort, and the rules or table rows that decided the model and effort, supported by facts from the task spec or review history. Record the effective effort even when the Agent call uses the default. Add a new entry for the second-round reassignment.
-
-For the first rework round, record the failure evidence and requested correction instead of making a new model or effort decision.
+Each time you choose, write one line in `.orchestra/<work>/decisions.md` with the task ID, the subagent, the model, the effective effort, and the rules or table rows that decided the model and the effort, supported by facts from the task spec or the review history. Record the effective effort even when the Agent call uses the default. A second-round choice is a new line.
 
 ```
 - [T01] sonnet-builder (Sonnet), medium. Model: step 2, no Opus rule applies; files and change are named, pattern exists in reports/daily.py, pytest checks it. Effort: well-specified task, medium default.

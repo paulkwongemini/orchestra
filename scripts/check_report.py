@@ -41,7 +41,7 @@ MAX_ATTEMPTS = 3
 MAX_LENGTH = 2000
 KEY_LINE = re.compile(r"^\W*(STATUS|TASK|REPORT|FILES|QUESTION)\W*[:：]\s*(.*)$", re.I)
 SCOUT_MAX_LENGTH = 4000
-EDITOR_MAX_LENGTH = 2000
+EDITOR_MAX_LENGTH = MAX_LENGTH
 EDITOR_KEY_LINE = re.compile(r"^\W*(STATUS|FILES|CHECK)\W*[:：]\s*(.*)$", re.I)
 EDITOR_KEYS = ("STATUS", "FILES", "CHECK")
 
@@ -79,14 +79,14 @@ def clean(value):
     return value.strip().strip("*`'\" ").strip()
 
 
-def parse(text):
-    """Returns (fields, lines that are outside the format)."""
+def parse(text, key_line=KEY_LINE):
+    """Returns (fields, lines that are outside the format). `key_line` matches the lines that open a field."""
     fields, stray, current = {}, [], None
     for raw in (text or "").strip().splitlines():
         line = raw.strip()
         if not line or line.startswith("```"):
             continue
-        m = KEY_LINE.match(line)
+        m = key_line.match(line)
         if m:
             current = m.group(1).upper()
             fields[current] = clean(m.group(2))
@@ -167,14 +167,10 @@ def validate(text, data):
     elif fields.get("QUESTION"):
         problems.append("Use the QUESTION line only when BLOCKED.")
 
-    files = fields.get("FILES") or ""
-    for item in re.split(r"[,\n]", files):
-        item = item.strip().lstrip("-*• ").strip("`").strip()
-        if len(item.split()) > 1 and item.lower() not in ("none", "n/a"):
-            problems.append("FILES takes only file paths. Put explanations in the report file.")
-            break
+    if files_hold_prose(fields.get("FILES") or ""):
+        problems.append("FILES takes only file paths. Put explanations in the report file.")
 
-    unit = None
+    work_folder = None
     if report:
         path = report if os.path.isabs(report) else os.path.join(c.project_dir(data), report)
         path = os.path.realpath(path)
@@ -199,17 +195,18 @@ def validate(text, data):
                 problems.append("TASK (%s) does not match the task that the report file name refers to." % task)
             if claims_done:
                 problems.extend(verification_problems(path))
-            unit, _rest = c.split_unit(path, data)
-    return problems, {"status": status, "task": task, "report": report, "unit": unit,
+            work_folder, _rest = c.split_work_folder(path, data)
+    return problems, {"status": status, "task": task, "report": report, "work_folder": work_folder,
                       "claims_done": claims_done}
 
 
-def files_problem(files):
+def files_hold_prose(files):
+    """Whether a FILES value holds anything but paths: an entry of several words is a sentence."""
     for item in re.split(r"[,\n]", files):
         item = item.strip().lstrip("-*• ").strip("`").strip()
         if len(item.split()) > 1 and item.lower() not in ("none", "n/a"):
-            return "FILES takes only file paths."
-    return None
+            return True
+    return False
 
 
 def validate_scout(text):
@@ -228,19 +225,7 @@ def validate_scout(text):
 def validate_editor(text):
     # Only the three key lines: the caller learns the result from the diff and from running the
     # check itself, and a narrative from the subagent would stand in for that.
-    fields, stray, current = {}, [], None
-    for raw in (text or "").strip().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("```"):
-            continue
-        m = EDITOR_KEY_LINE.match(line)
-        if m:
-            current = m.group(1).upper()
-            fields[current] = clean(m.group(2))
-        elif current == "FILES" and re.match(r"^[-*•]\s+\S", line):
-            fields[current] = (fields[current] + "\n" + line).strip()
-        else:
-            stray.append(line)
+    fields, stray = parse(text, EDITOR_KEY_LINE)
     problems = []
     missing = [k for k in EDITOR_KEYS if k not in fields]
     if missing:
@@ -255,8 +240,8 @@ def validate_editor(text):
         problems.append("DONE needs the CHECK command to exit with 0. Report FAILED, or fix the edit and run the check again.")
     if "FILES" in fields and not fields["FILES"]:
         problems.append("FILES is empty. Write the changed files, or none.")
-    elif files_problem(fields.get("FILES") or ""):
-        problems.append(files_problem(fields["FILES"]))
+    elif files_hold_prose(fields.get("FILES") or ""):
+        problems.append("FILES takes only file paths.")
     if stray:
         problems.append("There are lines outside the format.")
     if len(text or "") > EDITOR_MAX_LENGTH:
@@ -264,22 +249,22 @@ def validate_editor(text):
     return problems
 
 
-def check(role, text, data):
+def check(agent, text, data):
     """Returns (problems, info, format help) for the last message of a roster subagent."""
-    if role == "haiku-scout":
+    if agent == "haiku-scout":
         return validate_scout(text), {}, SCOUT_HELP
-    if role == "haiku-editor":
+    if agent == "haiku-editor":
         return validate_editor(text), {}, EDITOR_HELP
     problems, info = validate(text, data)
     return problems, info, FORMAT_HELP
 
 
-def record(data, role, agent_id, info):
-    if not info.get("unit"):
+def record(data, agent, agent_id, info):
+    if not info.get("work_folder"):
         return
-    c.save_meta(data, info["unit"], c.task_id(info["task"]), {
-        "role": role,
-        "kind": c.ROSTER[role]["kind"],
+    c.save_meta(data, info["work_folder"], c.task_id(info["task"]), {
+        "agent": agent,
+        "kind": c.ROSTER[agent]["kind"],
         "status": info["status"],
         "agent_id": agent_id,
     })
@@ -311,8 +296,8 @@ def main():
     data = c.read_input()
     if c.in_cli_mode(data):
         c.allow()  # a CLI mode is on: the conductor keeps the rules by its instructions alone
-    role = c.bare(data.get("agent_type"))
-    if role not in c.ROSTER:
+    agent = c.bare(data.get("agent_type"))
+    if agent not in c.ROSTER:
         c.allow()  # the conductor's own internal agents and agents off the roster are left alone
 
     agent_id = c.safe_name(data.get("agent_id") or "unknown")
@@ -323,10 +308,10 @@ def main():
         # The report is being delivered through the SubagentHandback tool
         remove(handback_flag)
         message = (data.get("tool_input") or {}).get("message") or ""
-        problems, info, help_text = check(role, message, data)
+        problems, info, help_text = check(agent, message, data)
         if problems:
             c.deny(help_text + "\nProblems: " + " ".join(problems))
-        record(data, role, agent_id, info)
+        record(data, agent, agent_id, info)
         try:
             with open(handback_flag, "w", encoding="utf-8") as f:
                 f.write(message)
@@ -339,9 +324,9 @@ def main():
         message = c.read_text(handback_flag)
         remove(handback_flag)
 
-    problems, info, help_text = check(role, message, data)
+    problems, info, help_text = check(agent, message, data)
     if not problems:
-        record(data, role, agent_id, info)
+        record(data, agent, agent_id, info)
         remove(counter)
         c.allow()
 
@@ -349,7 +334,7 @@ def main():
         remove(counter)
         c.warn_user(
             "Subagent %s could not fix its report in %d attempts, so it was allowed to finish. "
-            "Its last message or its verification record does not follow the format." % (role, MAX_ATTEMPTS)
+            "Its last message or its verification record does not follow the format." % (agent, MAX_ATTEMPTS)
         )
     c.block(help_text + "\nProblems: " + " ".join(problems))
 

@@ -1,4 +1,5 @@
 ---
+name: setup
 description: Checks the environment the orchestra harness runs in. Confirms that the hook scripts work, and lists the work folders in this project with how far each one has got.
 disable-model-invocation: true
 ---

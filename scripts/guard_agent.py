@@ -27,7 +27,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as c  # noqa: E402
-from guard_main import brief_approval  # noqa: E402
 
 TASK_REF = re.compile(r"\.orchestra/([^\s/`'\"]+)/tasks/([A-Za-z0-9][\w.\-]*\.md)")
 EXAMPLE = "`.orchestra/<work>/tasks/T01-short-name.md`"
@@ -44,15 +43,15 @@ def check_model(model):
     if not model:
         return
     if c.is_fable(model) or model == "inherit":
-        c.deny("A subagent cannot run on Fable or inherit the main model (Principle 5). " + JUDGMENT_ADVICE)
+        c.deny("A subagent cannot run on Fable or inherit the main model. " + JUDGMENT_ADVICE)
     if "haiku" in model:
         c.deny(
-            "This subagent does not run below Sonnet (Principle 4). For a very simple task, give "
+            "This subagent does not run below Sonnet. For a very simple task, give "
             "`orchestra:sonnet-builder` a low effort level. Work that needs no judgment goes to "
             "`orchestra:haiku-scout` or `orchestra:haiku-editor`."
         )
     if "opus" not in model and "sonnet" not in model:
-        c.deny("A subagent's model can only be opus or sonnet (Principle 4). You passed: `%s`" % model)
+        c.deny("A subagent's model can only be opus or sonnet. You passed: `%s`" % model)
 
 
 HAIKU_KEYS = {"haiku-scout": ("FIND",), "haiku-editor": ("DO", "FILES", "CHECK")}
@@ -100,7 +99,7 @@ def check_haiku_prompt(name, prompt, conductor):
 
 def check_editor_brief(data):
     """A conductor's `haiku-editor` call needs the brief of the active work folder to be confirmed."""
-    a = brief_approval(data)
+    a = c.brief_approval(data)
     if a.state == "confirmed":
         return
     after = "Start `%s:haiku-editor` again after they answer." % c.PLUGIN
@@ -111,14 +110,10 @@ def check_editor_brief(data):
     elif a.state == "no-brief":
         why = ("The active work folder has no brief %s, so no confirmed brief covers this edit. Write "
                "it, show it to the user, and ask them to confirm it. %s" % (a.shown, after))
-    elif a.state == "newer":
-        why = ("The brief %s was written or changed after the user last spoke, so the user has not "
-               "confirmed this version of the brief. Show the user the change and ask them to confirm "
-               "it. %s" % (a.shown, after))
     else:
-        why = ("No user turn is recorded for this session, so the user has not confirmed this version "
-               "of the brief %s. Show the user the brief and ask them to confirm it. %s" % (a.shown, after))
-    c.deny("A Haiku edit runs only under a brief the user has confirmed (Principle 2). " + why)
+        why = ("The brief %s is not confirmed: %s. Show the user the %s and ask them to confirm it. %s"
+               % (a.shown, a.unconfirmed, "change" if a.state == "newer" else "brief", after))
+    c.deny("A Haiku edit runs only under a brief the user has confirmed. " + why)
 
 
 def haiku_target(stype):
@@ -134,19 +129,19 @@ def subagent_call(data, tool, ti):
     caller = c.bare(data.get("agent_type"))
     if caller in c.HAIKU:
         c.deny(
-            "A Haiku subagent starts no other subagent (Principle 6). Do the request yourself, or "
+            "A Haiku subagent starts no other subagent. Do the request yourself, or "
             "say in your last message that you could not."
         )
     target = haiku_target(ti.get("subagent_type")) if tool != "Workflow" else None
     if target is None:
         c.deny(
-            "A subagent cannot start other subagents (Principle 6), except `%s:haiku-scout` and "
+            "A subagent cannot start other subagents, except `%s:haiku-scout` and "
             "`%s:haiku-editor` for a request that needs no judgment. If the task is too big, report "
             "BLOCKED and ask the conductor to split it." % (c.PLUGIN, c.PLUGIN)
         )
     if target == "haiku-editor" and c.ROSTER[caller]["kind"] == "readonly":
         c.deny(
-            "A read-only subagent starts nothing that edits (Principle 6). Put the change in your "
+            "A read-only subagent starts nothing that edits. Put the change in your "
             "report as a recommendation. `%s:haiku-scout` can find and read for you." % c.PLUGIN
         )
     check_haiku_model(ti.get("model"))
@@ -159,47 +154,47 @@ def check_task_spec(data, prompt):
     m = TASK_REF.search(prompt or "")
     if not m:
         c.deny(
-            "Every delegation goes through a task spec (Principle 9). Write the task spec at "
+            "Every delegation goes through a task spec. Write the task spec at "
             + EXAMPLE + " and put that path in the prompt. Required sections: "
             + ", ".join(c.TASK_HEADINGS)
         )
-    unit = os.path.join(c.work_dir(data), m.group(1))
+    work_folder = os.path.join(c.orchestra_dir(data), m.group(1))
     shown = ".orchestra/%s/tasks/%s" % (m.group(1), m.group(2))
-    path = os.path.join(unit, "tasks", m.group(2))
+    path = os.path.join(work_folder, "tasks", m.group(2))
     if not os.path.isfile(path):
-        c.deny("The task spec `%s` does not exist (Principle 9). Write it with the Write tool first." % shown)
+        c.deny("The task spec `%s` does not exist. Write it with the Write tool first." % shown)
     text = c.read_text(path)
     missing = c.missing_headings(text, c.TASK_HEADINGS)
     if missing:
         c.deny(
-            "The task spec is missing required sections (Principle 9): %s. Add each one as a "
+            "The task spec is missing required sections: %s. Add each one as a "
             "`## Heading`." % ", ".join(missing)
         )
     empty = c.empty_sections(text, c.TASK_HEADINGS)
     if empty:
-        c.deny("These sections of the task spec are empty (Principle 9): %s" % ", ".join(empty))
-    return unit
+        c.deny("These sections of the task spec are empty: %s" % ", ".join(empty))
+    return work_folder
 
 
-def check_brief(data, unit):
+def check_brief(data, work_folder):
     """Principle 2. Delegating implementation requires a brief in the same work folder."""
-    shown = "`.orchestra/%s/brief.md`" % os.path.basename(unit)
-    brief = os.path.join(unit, "brief.md")
+    shown = "`.orchestra/%s/brief.md`" % os.path.basename(work_folder)
+    brief = os.path.join(work_folder, "brief.md")
     if not os.path.isfile(brief):
         c.deny(
             "Before delegating implementation, write down the user's intent as a brief and get it "
-            "confirmed (Principle 2). Write %s and show it to the user. Required sections: %s"
+            "confirmed. Write %s and show it to the user. Required sections: %s"
             % (shown, ", ".join(c.BRIEF_HEADINGS))
         )
     missing = c.missing_headings(c.read_text(brief), c.BRIEF_HEADINGS)
     if missing:
-        c.deny("The brief %s is missing required sections (Principle 2): %s" % (shown, ", ".join(missing)))
+        c.deny("The brief %s is missing required sections: %s" % (shown, ", ".join(missing)))
     # The user can only have confirmed a brief that existed, in this form, when they last spoke.
     turn = c.last_user_turn(data)
     if turn is not None and os.path.getmtime(brief) > turn:
         c.deny(
             "The brief %s was written or changed after the user last spoke, so the user has not "
-            "confirmed this version (Principle 2). Show it to the user and ask them to confirm it. "
+            "confirmed this version. Show it to the user and ask them to confirm it. "
             "Delegate after they answer." % shown
         )
 
@@ -221,26 +216,26 @@ def main():
 
     if tool == "Workflow":
         c.deny(
-            "Workflows run agents that are not on the roster, so they are not used here "
-            "(Principles 4 and 5). Split the work and delegate each part directly to a roster "
+            "Workflows run agents that are not on the roster, so they are not used here. "
+            "Split the work and delegate each part directly to a roster "
             "subagent: " + c.roster_text()
         )
 
     stype = str(ti.get("subagent_type") or "").strip()
     if not stype:
         c.deny(
-            "A subagent started without a type runs on the main model, the conductor's own model "
-            "(Principle 5). Choose one from the roster: " + c.roster_text()
+            "A subagent started without a type runs on the main model, the conductor's own model. "
+            "Choose one from the roster: " + c.roster_text()
         )
     if stype.lower() == "fork":
         c.deny(
-            "A fork is a copy of yourself on the main model, so it cannot be created (Principle 5). "
+            "A fork is a copy of yourself on the main model, so it cannot be created. "
             + JUDGMENT_ADVICE
         )
     name = c.bare(stype)
     foreign = ":" in stype and not stype.startswith(c.PLUGIN + ":")
     if foreign or name not in c.ROSTER:
-        c.deny("`%s` is not on the roster (Principles 4 and 5). Roster: %s" % (stype, c.roster_text()))
+        c.deny("`%s` is not on the roster. Roster: %s" % (stype, c.roster_text()))
 
     if name in c.HAIKU:
         check_haiku_model(ti.get("model"))
@@ -252,21 +247,21 @@ def main():
     if not c.is_loaded(data, c.DELEGATION_SKILL):
         c.deny(
             "Choose the subagent and the effort level by the delegation rules, which are not "
-            "loaded yet (Principle 4). Invoke the `%s` skill with the Skill tool, choose by its "
+            "loaded yet. Invoke the `%s` skill with the Skill tool, choose by its "
             "rules, and then delegate." % c.DELEGATION_SKILL
         )
     impl = c.ROSTER[name]["kind"] == "impl"
     if impl and not c.is_loaded(data, c.DOCUMENTATION_SKILL):
         c.deny(
             "Decide what this task does to the project's documents and comments by the "
-            "documentation rules, which are not loaded yet (Principle 11). Invoke the `%s` skill "
+            "documentation rules, which are not loaded yet. Invoke the `%s` skill "
             "with the Skill tool, check the task spec against its rules, and then delegate."
             % c.DOCUMENTATION_SKILL
         )
-    unit = check_task_spec(data, ti.get("prompt"))
-    c.set_active_work(data, unit)
+    work_folder = check_task_spec(data, ti.get("prompt"))
+    c.set_active_work(data, work_folder)
     if impl:
-        check_brief(data, unit)
+        check_brief(data, work_folder)
     c.allow()
 
 

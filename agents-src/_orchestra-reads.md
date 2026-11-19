@@ -1,0 +1,1 @@
+- Inside `.orchestra/`, read only your task spec and the files it names. Do not read or search other reports, review records, or earlier work folders to look for conventions. A report is an unverified claim about work that may have been corrected or changed since, so take conventions from the code and the project's documents.

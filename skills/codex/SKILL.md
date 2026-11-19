@@ -1,5 +1,7 @@
 ---
+name: codex
 description: The facts of the Codex CLI for a conductor in Codex mode, with the models each worker role runs on. Load it after orchestra:cli-workers once the user has turned Codex mode on with /orchestra:conduct-codex.
+user-invocable: false
 ---
 
 # Codex workers

@@ -1,5 +1,7 @@
 ---
+name: cli-workers
 description: The conductor's rules when its workers are runs of another vendor's coding CLI instead of Claude subagents. Load it after orchestra:conductor and before the CLI's own skill, once the user has turned a CLI mode on with /orchestra:conduct-codex or /orchestra:conduct-agy. Not for the claude mode.
+user-invocable: false
 ---
 
 # Workers that are CLI runs
@@ -21,7 +23,7 @@ The plugin's hooks do not guard you in a CLI mode, with one exception: an Opus c
 
 The workers are guarded, by a hook of their own CLI that each run carries. See "A run".
 
-The mode also tests whether these rules hold without hooks. Do not test them: keep them. If you find that you broke one, say so in the final report.
+The user also runs this mode to learn whether these rules hold without hooks, and a rule broken in silence spoils that answer. If you find that you broke one, say so in the final report.
 
 ## What replaces what in the conductor's instructions
 
@@ -39,7 +41,7 @@ The mode also tests whether these rules hold without hooks. Do not test them: ke
 | `engineer` | Implementation that needs diagnosis, a substantial decision within the spec's limits, or coordinated changes across components | `high` |
 | `analyst` | Findings only: an investigation, a review, a comparison. It changes no project file | `high` |
 
-The CLI's skill says which model each role runs on. The user chose these defaults: `implementer` and `writer` sit one level above the vendor guides' starting point, because the user has usage to spare on the CLI's plan, and `analyst` may go up to `max`. Choose the effort by how deep the reasoning has to go, not by the size of the change:
+The CLI's skill says which model each role runs on. The defaults put the quality of the result before the usage of the CLI's plan: `implementer` and `writer` sit one level above the vendor guides' starting point, and `analyst` may go up to `max`. Choose the effort by how deep the reasoning has to go, not by the size of the change:
 
 - `implementer` and `writer`: `high` when the work needs planning across several steps or reconciling supplied material.
 - `engineer`: `medium` for bounded work with clear integration checks, `xhigh` when interacting causes make the change and its verification hard.
@@ -47,7 +49,7 @@ The CLI's skill says which model each role runs on. The user chose these default
 
 Before each run, write one line in the decision log with the role, the model, the effort and the reason: `- [T01] implementer, gpt-6.2-sol, medium. The spec names the file, the change and the test.` Name the model as the CLI's skill gives it. For a second rework round, choose again from the current task spec and the review history.
 
-Each role's instructions are in the plugin's `roles/` folder, with the rules every worker shares in `roles/reporting.md`. The worker reads them itself. Write the task spec for a worker that has those instructions and nothing of this conversation.
+Each role's instructions are in the plugin's `roles/` folder, with the rules every worker shares in `roles/shared.md`. The worker reads them itself. Write the task spec for a worker that has those instructions and nothing of this conversation.
 
 ## The task spec for a run
 
@@ -77,6 +79,13 @@ python3 <plugin>/scripts/worker.py run --cli codex --task .orchestra/<work>/task
 
 - **What each run carries.** The script reads the brief at every run: its `Worker network:` line, and its `Pre-approved:` keys. It passes the run a guard, a PreToolUse hook of the CLI's own, which refuses what the claude mode's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, a data command that names production, an edit inside `.orchestra/` other than the task's report and `files/` folder, any project edit by a read-only role, and starting a Claude session. It reads the command line, so it is a tripwire, not a sandbox. Change the brief before a run, not during it.
 - A run can take longer than a command in the foreground may. Start it in the background, end your turn, and go on when it reports, as you would wait for a subagent. Do not poll.
+- **The user can follow a run.** When you start one, give the user, in its own `bash` block, the command that follows it in a terminal of their own: the worker's messages, its commands and edits, and the guard's refusals as they happen.
+
+  ```bash
+  python3 <plugin>/scripts/worker.py watch --task .orchestra/<work>/tasks/T01-name.md
+  ```
+
+  It is for the user. You do not run it and you do not read what it shows, which is the run's record: your review still comes first.
 - Runs that may go side by side under "Working in one directory" are started in the same message.
 
 ## After a run

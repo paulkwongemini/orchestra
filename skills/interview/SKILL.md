@@ -6,7 +6,7 @@ user-invocable: false
 
 # Understanding the intent
 
-The interview ends in a brief that lets you make later decisions the way the user would. A user cannot be understood in one turn, and the finer the work, the less likely it is. So ask one thing, take in the answer, and only then decide what to ask next.
+The interview ends in a brief that lets you make later decisions the way the user would. What a user wants is rarely clear from one message, and the more detailed the work, the less clear it is. So ask one thing, take in the answer, and only then decide what to ask next.
 
 ## 1. Find the facts yourself
 
@@ -22,7 +22,7 @@ The interview ends in a brief that lets you make later decisions the way the use
 
 - List the decisions that are still open. Some decisions hang off others: the answer to one changes which others exist, or what their options are.
 - Order them so that a decision comes before the decisions that depend on it. Among those that can be asked now, start with the one whose answer changes the most of the rest.
-- Keep the tree in your head or in your reply's reasoning. Do not write it to a file and do not show the whole tree to the user.
+- The tree is your own working aid. Do not write it to a file, and do not show the whole tree to the user.
 
 ## 3. Ask one question per turn
 
@@ -58,12 +58,12 @@ The conductor's instructions say under "Files you write yourself" which kinds of
 
 - From what you found in step 1, list the files of those two kinds that the work will change. Include the documents that you expect the close of each task group to change.
 - When the list is empty, do not ask. Write `Conductor writes: none`.
-- Otherwise ask one question. Name each file, say why you would write it yourself, and say what happens if the user does not approve it: a subagent writes it from a task spec that already holds the text, which costs more tokens and changes nothing in the result. The question may list several files for the user to tick. That is still one question.
-- A path goes on the line only when the user approved that file in their own answer. Never write a path as an assumption, and never take "stop asking" or "do whatever it takes" as approval. If the user ends the interview before this is settled, write `Conductor writes: none`.
+- Otherwise ask one question, which may list several files for the user to tick. Name each file, say why you would write it yourself, and say what happens if the user does not approve it: a subagent writes it from a task spec that already holds the text, which costs more tokens and changes nothing in the result.
+- The rule of step 5 holds here: a path goes on the line only when the user approved that file in their own answer, and never as an assumption. If the user ends the interview before this is settled, write `Conductor writes: none`.
 - Do not offer code, configuration, or tests. They stay with the subagents even when the user would let you write them.
 - Where the project's instructions say that a file must not be edited, or who may edit it, do not offer that file.
 
-Reason: the user decides which files go without a second writer and an independent review, and the interview is the last moment they are sure to be present.
+Reason: the user decides which files go without a second writer and an independent review.
 
 ## 7. Settle whether the work uses a worktree
 
@@ -72,9 +72,9 @@ The default is no worktree: every subagent works in the user's working directory
 - When the project's instructions forbid worktrees, do not consider one and do not ask. Put the rule under `## Constraints` and design the work without it. If the work cannot be done without one, tell the user that the two conflict.
 - When the work does not need one, do not ask. Write `Worktrees: not used.` under `## Constraints`.
 - When the work needs one, ask. Say which part of the work needs it, why running the tasks one after the other does not do it, and what changes if the user says no. Write the answer under `## Constraints`: what the worktree is approved for, or that none is used.
-- Never write an approval as an assumption. If the user ends the interview before this is settled, the work uses no worktree.
+- As in step 5, never write an approval as an assumption. If the user ends the interview before this is settled, the work uses no worktree.
 
-Reason: the user decides whether a second checkout is worth what it costs, and the interview is the moment to ask.
+Reason: the user decides whether a second checkout is worth what it costs.
 
 ## 8. When to stop asking
 
@@ -94,8 +94,7 @@ Reason: every question costs the user a turn. A question whose answer would not 
 
 - If a tool that shows a file to the user is available (in the Claude desktop app, the one that opens a file in a side pane), open the brief with it. If there is none, give the path of the brief.
 - In the chat, write two or three lines: what will be built, the assumptions you made without asking, any extras the brief proposes, which kinds of action the brief pre-approves, and which files you will write yourself. Do not paste the brief.
-- Then ask the one fixed last question, alone in its own turn: "Do you want me to wait until you confirm the brief?" Offer two options: start now, or review the brief first.
+- Then ask the one fixed last question, alone in its own turn, whatever the user said about asking: "Do you want me to wait until you confirm the brief?" Offer two options: start now, or review the brief first. When the interview left you nothing to ask, this is the only question.
 - Do not ask a separate question such as "Is my understanding correct?". The brief is what the user confirms.
   Reason: a yes to a summary confirms nothing. The user can only judge the brief itself.
 - If they choose to start, go on to design. If they choose to review, wait. When they ask for a change, change the brief, show it again, and ask the last question again.
-- The harness refuses the delegation until the user has replied after the brief last changed.
