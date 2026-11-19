@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a task on another vendor's coding CLI for a conductor in a CLI mode, and check the run.
+"""Run a task on the Codex CLI or the Antigravity CLI for a conductor in a CLI mode, and check the run.
 
     worker.py run    --cli codex --task <task spec> --role <role> [--effort <level>]
     worker.py resume --task <task spec> --message <file>

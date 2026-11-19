@@ -1,14 +1,14 @@
 ---
 name: cli-workers
-description: The conductor's rules when its workers are runs of another vendor's coding CLI instead of Claude subagents. Load it after orchestra:conductor and before the CLI's own skill, once the user has turned a CLI mode on with /orchestra:conduct-codex or /orchestra:conduct-agy. Not for the claude mode.
+description: The conductor's rules when its workers are runs of the Codex CLI or the Antigravity CLI instead of Claude subagents. Load it after orchestra:conductor and before the CLI's own skill, once the user has turned a CLI mode on with /orchestra:conduct-codex or /orchestra:conduct-agy. Not for the claude mode.
 user-invocable: false
 ---
 
 # Workers that are CLI runs
 
-You are the conductor, as `orchestra:conductor` describes, and the user has turned on a CLI mode: your workers are runs of another vendor's coding CLI instead of Claude subagents. The CLI's own skill, `orchestra:codex` or `orchestra:agy`, holds the facts of that CLI. This skill holds what changes for you. Where this skill and the conductor's instructions differ, this skill wins.
+You are the conductor, as `orchestra:conductor` describes, and the user has turned on a CLI mode: your workers are runs of the Codex CLI or the Antigravity CLI instead of Claude subagents. The CLI's own skill, `orchestra:codex` or `orchestra:agy`, holds the facts of that CLI. This skill holds what changes for you. Where this skill and the conductor's instructions differ, this skill wins.
 
-The point of the mode is to spend the other vendor's usage on the implementation instead of Claude's, with the result's quality unchanged. How a worker gets to its result does not matter. The result you review does.
+The point of the mode is to spend the CLI's usage on the implementation instead of Claude's, with the result's quality unchanged. How a worker gets to its result does not matter. The result you review does.
 
 ## No harness in this mode
 
@@ -41,7 +41,7 @@ The user also runs this mode to learn whether these rules hold without hooks, an
 | `engineer` | Implementation that needs diagnosis, a substantial decision within the spec's limits, or coordinated changes across components | `high` |
 | `analyst` | Findings only: an investigation, a review, a comparison. It changes no project file | `high` |
 
-The CLI's skill says which model each role runs on. The defaults put the quality of the result before the usage of the CLI's plan: `implementer` and `writer` sit one level above the vendor guides' starting point, and `analyst` may go up to `max`. Choose the effort by how deep the reasoning has to go, not by the size of the change:
+The CLI's skill says which model each role runs on. The defaults put the quality of the result before the usage of the CLI's plan: `implementer` and `writer` sit one level above the starting point of OpenAI's and Google's guides, and `analyst` may go up to `max`. Choose the effort by how deep the reasoning has to go, not by the size of the change:
 
 - `implementer` and `writer`: `high` when the work needs planning across several steps or reconciling supplied material.
 - `engineer`: `medium` for bounded work with clear integration checks, `xhigh` when interacting causes make the change and its verification hard.
@@ -53,7 +53,7 @@ Each role's instructions are in the plugin's `roles/` folder, with the rules eve
 
 ## The task spec for a run
 
-The format and the headings are the same. The vendors' guides for these models ask for what a colleague who knows the project would need, so add these:
+The format and the headings are the same. OpenAI's and Google's guides for these models ask for what a colleague who knows the project would need, so add these:
 
 - **Done.** Say what counts as finished, and where the worker must be exhaustive, such as every caller of a function. Name the conventions to follow and the behavior that callers depend on, which must not change. Say what you will check in your review.
 - **Tests.** Under `## Acceptance criteria`, name the tests to add or change. A worker adds tests only where the spec asks, and beyond that only one that catches a regression the existing tests would miss.

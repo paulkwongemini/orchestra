@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for a worker run that scripts/worker.py starts on another vendor's CLI.
+"""PreToolUse hook for a worker run that scripts/worker.py starts on the Codex CLI or the Antigravity CLI.
 
     worker_guard.py <context.json>
 

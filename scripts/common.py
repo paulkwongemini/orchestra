@@ -302,8 +302,8 @@ def main_effort(data):
 #
 # Conductor mode is on when the user has turned on one of three worker modes. In `claude` the
 # workers are Claude subagents and the hooks guard the work. In the CLI modes the workers are
-# runs of another vendor's CLI, and the hooks step aside: the conductor keeps the rules by its
-# instructions alone.
+# runs of the Codex CLI or the Antigravity CLI, and the hooks step aside: the conductor keeps the
+# rules by its instructions alone.
 MODES = ("claude", "codex", "agy")
 CLI_MODES = ("codex", "agy")
 # The mode each command turns on. `disable` turns conductor mode off.

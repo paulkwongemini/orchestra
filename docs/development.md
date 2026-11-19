@@ -136,7 +136,7 @@ The roles of the CLI workers are not built this way, because a CLI worker can re
 
 ## How the CLI modes work
 
-The modes exist to spend another vendor's plan on the implementation instead of the Claude plan, with the quality of the result unchanged. How a worker reaches its result does not matter. The result the conductor reviews does.
+The modes exist to spend the Codex or Antigravity CLI's plan on the implementation instead of the Claude plan, with the quality of the result unchanged. How a worker reaches its result does not matter. The result the conductor reviews does.
 
 The user set the installation boundary: the plugin installs with the two commands in the README and needs no second step. No background service, no change to the user's Codex or agy configuration, and no file written into the user's project to set a mode up. Whatever a run needs is in the plugin's own files or in the settings that `scripts/worker.py` passes for that one run. That is why the guard reaches Codex through `-c` on the command line, and reaches agy through a workspace folder of the plugin's own.
 
@@ -148,7 +148,7 @@ The instructions have three layers, so that a further CLI adds one skill and one
 
 The modes are also a test of whether the conductor keeps its rules without hooks. `scripts/audit.py` reads a finished session's transcript and its work folder, and lists each point where a hook would have refused or flagged a call. The same audit runs on a `claude`-mode session, where the findings are attempts that a hook stopped, so the two kinds of mode compare on one measure. Whether the `claude` mode drops its hooks is the user's decision, taken from the audit's results. No bar is set in advance. The question about a low effort on Opus stays in every mode, because the conductor cannot know its own effort and no instruction can replace the hook.
 
-The role files in `roles/` follow the vendors' own prompting guides, [Prompting GPT-6.2 Astra](https://learn.chatgpt.com/guides/prompting-gpt-6-2-astra) and Google's [Engineer agentic prompts](https://docs.cloud.google.com/gemini/docs/discover/engineer-agentic-prompts). What the two ask of a coding worker is mostly the same, so the roles are shared by both CLIs. Where they differ, on how many tests to write, the task spec decides: it names the tests.
+The role files in `roles/` follow OpenAI's and Google's own prompting guides, [Prompting GPT-6.2 Astra](https://learn.chatgpt.com/guides/prompting-gpt-6-2-astra) and Google's [Engineer agentic prompts](https://docs.cloud.google.com/gemini/docs/discover/engineer-agentic-prompts). What the two ask of a coding worker is mostly the same, so the roles are shared by both CLIs. Where they differ, on how many tests to write, the task spec decides: it names the tests.
 
 Facts about the CLIs that the code does not show:
 

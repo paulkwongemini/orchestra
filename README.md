@@ -2,7 +2,7 @@
 
 A Claude Code plugin that keeps the main model in the conductor role when you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents take the work that needs no judgment. As the work goes on, the conductor keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
 
-In two further modes the conductor hands the implementation to another vendor's coding CLI instead of Claude subagents: the Codex CLI, or the Antigravity CLI with Gemini models. See "Workers on another vendor's CLI".
+In two further modes the conductor hands the implementation to the Codex CLI, or to the Antigravity CLI with Gemini models, instead of Claude subagents. See "Workers on the Codex CLI or the Antigravity CLI".
 
 Orchestra chooses the model and effort for the workers. You set the conductor's own effort: see "Usage".
 
@@ -142,9 +142,9 @@ Part of the work needs no judgment: finding where something is, or making the sa
 
 No hook checks whether a request really needs no judgment, whether the editor stayed inside the files it was given, or whether the caller ran the check again. Those are instructions.
 
-## Workers on another vendor's CLI
+## Workers on the Codex CLI or the Antigravity CLI
 
-`/orchestra:conduct-codex` and `/orchestra:conduct-agy` keep the conductor and its workflow, and change who implements. Each task is one run of the Codex CLI, or of the Antigravity CLI (`agy`) on a Gemini model. The implementation then spends that vendor's plan instead of your Claude plan. The conductor still writes the brief and the task specs, reviews each result before it reads the report, and sends failed work back.
+`/orchestra:conduct-codex` and `/orchestra:conduct-agy` keep the conductor and its workflow, and change who implements. Each task is one run of the Codex CLI, or of the Antigravity CLI (`agy`) on a Gemini model. The implementation then spends the plan that CLI is signed in with instead of your Claude plan. The conductor still writes the brief and the task specs, reviews each result before it reads the report, and sends failed work back.
 
 Requirements: the CLI of the mode, installed and signed in. The plugin changes nothing in its configuration and writes no setup file into your project.
 
@@ -205,7 +205,7 @@ These rules are instructions. No hook enforces them.
 
 ## Principles and how each is enforced
 
-The enforcement below applies in a conductor session whose workers are Claude subagents. With CLI workers the hooks step aside, and every row is an instruction. See "Workers on another vendor's CLI".
+The enforcement below applies in a conductor session whose workers are Claude subagents. With CLI workers the hooks step aside, and every row is an instruction. See "Workers on the Codex CLI or the Antigravity CLI".
 
 | Principle | Enforcement | File |
 |---|---|---|
