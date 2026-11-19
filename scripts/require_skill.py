@@ -17,6 +17,10 @@ An Opus conductor that runs at a low or medium effort level is stopped once, at 
 call, and told to recommend High or above to the user and ask whether to go on. The user
 decides: the next call goes through whatever they answer. The question comes again only when
 the effort changes to another low level, or the user turns conductor mode on again.
+
+In a CLI mode (`codex`, `agy`) the effort question is the only thing this hook does. The
+instructions are not required to be loaded first, because the CLI modes run on instructions
+alone. The conductor cannot know its own effort, so no instruction can replace the question.
 """
 import os
 import sys
@@ -48,12 +52,14 @@ def check_effort(data):
 
 def main():
     data = c.read_input()
-    if not c.main_is_conductor(data):
+    if not c.main_conducts(data):
         c.allow()
     tool = data.get("tool_name") or ""
     if tool in ALWAYS:
         c.allow()
-    check_effort(data)
+    check_effort(data)  # the one check that acts in the CLI modes too: it asks, it does not guard
+    if c.in_cli_mode(data):
+        c.allow()
     skill = (data.get("tool_input") or {}).get("skill") if tool == "Skill" else None
     if c.is_skill(skill, c.CONDUCTOR_SKILL):
         c.mark_loaded(data, True)

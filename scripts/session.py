@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """SessionStart, PostModelSwitch, the user's prompts and answers: keep track of whether the session is in conductor mode and of when the user last spoke, and tell the main conversation.
 
-Conductor mode is off when a session starts. The user turns it on for the session with
-`/orchestra:conduct`, `/orchestra:enable` or `/orchestra:conductor`, and off with
-`/orchestra:disable`. While it is on, the harness applies when the main conversation runs on
-a Fable or an Opus model. On any other model the session is an ordinary one, and the guards
-leave it alone.
+Conductor mode is off when a session starts. The user turns on one mode for the session:
+`claude` with `/orchestra:conduct`, `/orchestra:enable` or `/orchestra:conductor`, `codex` with
+`/orchestra:conduct-codex`, and `agy` with `/orchestra:conduct-agy`. `/orchestra:disable`
+turns it off. In the `claude` mode, the harness applies when the main conversation runs on a
+Fable or an Opus model. On any other model the session is an ordinary one, and the guards leave
+it alone. In a CLI mode this hook only records the mode and the user's turns, and sends no note:
+the conductor works from its instructions alone.
 
 A hook is not always told the model, so a note that is sent before the model is known covers
 both cases. Claude Code tells the model which model it is, so the model can pick the case that
@@ -61,13 +63,20 @@ SWITCH_OFF = (
     "</orchestra>"
 )
 
-ON_COMMANDS = ("conduct", "enable", "conductor")
-COMMANDS = ON_COMMANDS + ("disable",)
-COMMAND = re.compile(r"^\s*/%s:(%s)(?:\s|$)" % (c.PLUGIN, "|".join(COMMANDS)))
+# The mode each command turns on. `disable` turns the mode off.
+COMMAND_MODES = {
+    "conduct": "claude",
+    "enable": "claude",
+    "conductor": "claude",
+    "conduct-codex": "codex",
+    "conduct-agy": "agy",
+}
+COMMANDS = tuple(COMMAND_MODES) + ("disable",)
+COMMAND = re.compile(r"^\s*/%s:(%s)(?:\s|$)" % (c.PLUGIN, "|".join(re.escape(n) for n in COMMANDS)))
 
 
 def command_of(data):
-    """The orchestra command the user typed, if any: conduct, enable, conductor, or disable."""
+    """The orchestra command the user typed, if any: a key of COMMAND_MODES, or disable."""
     name = str(data.get("command_name") or "")
     if name:
         name = name.lstrip("/")
@@ -95,10 +104,10 @@ def main():
         # Only a command the user types turns conductor mode on or off for the session.
         command = command_of(data)
         if command == "disable":
-            c.set_enabled(data, False)
-        elif command in ON_COMMANDS:
-            c.set_enabled(data, True)
-            c.mark_effort_asked(data, None)  # turning it on asks about a low effort again
+            c.set_mode(data, None)
+        elif command in COMMAND_MODES:
+            c.set_mode(data, COMMAND_MODES[command])
+            c.mark_effort_asked(data, None)  # turning a mode on asks about a low effort again
         if command == "conductor":
             c.mark_loaded(data, True)  # the command puts the skill's text into the conversation
         c.allow()
@@ -106,8 +115,8 @@ def main():
     if event == "PostModelSwitch":
         to_model, from_model = data.get("to_model"), data.get("from_model")
         c.record_switch(data, to_model)
-        if data.get("source") == "resume" or not c.is_enabled(data):
-            c.allow()  # a restored model, not a change. SessionStart has already said what applies
+        if data.get("source") == "resume" or c.session_mode(data) != "claude":
+            c.allow()  # a restored model, not a change, or a mode that sends no notes
         now, before = c.is_conductor_model(to_model), c.is_conductor_model(from_model)
         if now and not before:
             c.add_context(event, SWITCH_ON)
@@ -122,8 +131,8 @@ def main():
         c.mark_loaded(data, False)  # the instructions have to be loaded again
         for sub_skill in c.SUB_SKILLS:
             c.mark_loaded(data, False, sub_skill)
-    if not c.is_enabled(data):
-        c.allow()  # conductor mode is off until the user turns it on
+    if c.session_mode(data) != "claude":
+        c.allow()  # off until the user turns a mode on, and a CLI mode sends no notes
     known = c.main_model_can_conduct(data)
     if known is None:
         c.add_context("SessionStart", BOOT_UNKNOWN)

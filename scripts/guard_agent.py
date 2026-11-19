@@ -206,6 +206,8 @@ def check_brief(data, unit):
 
 def main():
     data = c.read_input()
+    if c.in_cli_mode(data):
+        c.allow()  # a CLI mode is on: the conductor keeps the rules by its instructions alone
     tool = data.get("tool_name") or "Agent"
     ti = data.get("tool_input") or {}
 

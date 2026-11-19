@@ -25,9 +25,10 @@ def fork_verdict(model, tmp):
     with open(transcript, "w", encoding="utf-8") as f:
         f.write(json.dumps({"type": "api-request", "params": {"model": model}}) + "\n")
     session = "doctor-" + model
-    # Conductor mode is on in the test session, as after `/orchestra:conduct`.
+    # The `claude` conductor mode is on in the test session, as after `/orchestra:conduct`.
     os.makedirs(os.path.join(tmp, "sessions"), exist_ok=True)
-    open(os.path.join(tmp, "sessions", session + ".on"), "w").close()
+    with open(os.path.join(tmp, "sessions", session + ".mode"), "w", encoding="utf-8") as f:
+        f.write("claude")
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Agent",
@@ -93,6 +94,7 @@ def main():
     lines.append(
         "%s Mode: conductor mode is off when a session starts. `/orchestra:conduct` turns it on "
         "for the session, and it applies while the session runs on a Fable or an Opus model. "
+        "`/orchestra:conduct-codex` turns on the Codex mode, in which the hooks step aside. "
         "`/orchestra:disable` turns it off." % OK
     )
 

@@ -174,11 +174,11 @@ class HookTest(unittest.TestCase):
         # the user has turned conductor mode on, and the delegation rules and the documentation
         # rules are already loaded.
         self.set_transcript([request(FABLE)])
-        self.on = os.path.join(self.state, "sessions", "session-1.on")
+        self.on = os.path.join(self.state, "sessions", "session-1.mode")
         self.rules = os.path.join(self.state, "sessions", "session-1.delegation")
         self.doc_rules = os.path.join(self.state, "sessions", "session-1.documentation")
         os.makedirs(os.path.dirname(self.rules))
-        open(self.on, "w").close()
+        self.set_mode("claude")
         open(self.rules, "w").close()
         open(self.doc_rules, "w").close()
 
@@ -250,9 +250,14 @@ class HookTest(unittest.TestCase):
         """Whether the main conversation may write a source file. Denied only in a conductor session."""
         return self.verdict("guard_main.py", self.main("Write", {"file_path": "src/app.py", "content": "x"}))
 
+    def set_mode(self, mode, session="session-1"):
+        """Record a conductor mode for a session, as the user's command does."""
+        with open(os.path.join(self.state, "sessions", session + ".mode"), "w", encoding="utf-8") as f:
+            f.write(mode)
+
     def turn_on(self, session):
-        """Turn conductor mode on for another session, as `/orchestra:conduct` does."""
-        open(os.path.join(self.state, "sessions", session + ".on"), "w").close()
+        """Turn the `claude` conductor mode on for another session, as `/orchestra:conduct` does."""
+        self.set_mode("claude", session)
 
     def switch(self, to_model, from_model=SONNET, source="picker"):
         payload = {"hook_event_name": "PostModelSwitch", "from_model": from_model, "to_model": to_model,
@@ -418,6 +423,92 @@ class SwitchTest(HookTest):
         self.assertIsNone(self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "compact"}))
         self.assertIsNone(self.switch(FABLE, from_model=SONNET))
         self.assertEqual(self.write_src(), "allow")
+
+
+class CliModeTest(HookTest):
+    """In a CLI mode (`codex`, `agy`) the hooks step aside, except the Opus effort question."""
+
+    def say(self, prompt):
+        self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": prompt})
+
+    def guards(self):
+        """The verdicts of each guard on calls it refuses in the `claude` mode."""
+        self.write(UNIT + "/reports/T01.md", "STATUS: DONE\nno verification record\n")
+        return {
+            "write": self.write_src(),
+            "fork": self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "fork"})),
+            "untyped": self.verdict("guard_agent.py", self.main("Agent", {"prompt": "x"})),
+            "migrate": self.bash("bin/rails db:migrate"),
+            "load": self.verdict("require_skill.py", self.main("Read", {"file_path": "a"})),
+            "report": self.verdict("report_gate.py", self.main("Read", {"file_path": UNIT + "/reports/T01.md"})),
+            "subagent": self.verdict("guard_agent.py", self.sub("sonnet-builder", "Agent", {"subagent_type": "orchestra:opus-engineer", "prompt": "x"})),
+            "handback": self.verdict("check_report.py", {"hook_event_name": "SubagentStop", "agent_id": "agent-1",
+                                                         "agent_type": "orchestra:opus-engineer",
+                                                         "last_assistant_message": "I did it."}),
+        }
+
+    def test_the_claude_mode_guards(self):
+        verdicts = self.guards()
+        self.assertEqual(verdicts.pop("handback"), "block")
+        for name, verdict in verdicts.items():
+            self.assertEqual(verdict, "deny", name)
+
+    def test_every_guard_steps_aside_in_a_cli_mode(self):
+        for command in ("/orchestra:conduct-codex", "/orchestra:conduct-agy"):
+            self.say(command)
+            for name, verdict in self.guards().items():
+                self.assertEqual(verdict, "allow", "%s %s" % (command, name))
+
+    def test_commands_switch_between_modes(self):
+        self.say("/orchestra:conduct-codex fix the login bug")
+        self.assertEqual(self.write_src(), "allow")
+        self.say("/orchestra:conduct")
+        self.assertEqual(self.write_src(), "deny")
+        self.say("/orchestra:conduct-agy")
+        self.assertEqual(self.write_src(), "allow")
+        self.say("/orchestra:conductor")
+        self.assertEqual(self.write_src(), "deny")
+        self.say("/orchestra:conduct-codex")
+        self.say("/orchestra:disable")
+        self.assertEqual(self.write_src(), "allow")
+        self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "fork"})), "allow")
+
+    def test_only_the_exact_command_counts(self):
+        for prompt in ("/orchestra:conduct-codexx", "/orchestra:conduct-cod", "please run /orchestra:conduct-codex"):
+            self.say(prompt)
+            self.assertEqual(self.write_src(), "deny", prompt)
+        self.run_hook("session.py", {"hook_event_name": "UserPromptExpansion", "command_name": "orchestra:conduct-codex",
+                                     "command_source": "plugin", "prompt": "/orchestra:conduct-codex"})
+        self.assertEqual(self.write_src(), "allow")
+        self.run_hook("session.py", {"hook_event_name": "UserPromptExpansion", "command_name": "other:conduct",
+                                     "command_source": "plugin", "prompt": "/other:conduct"})
+        self.assertEqual(self.write_src(), "allow")
+
+    def test_a_cli_mode_gets_no_notes(self):
+        self.say("/orchestra:conduct-codex")
+        self.set_transcript([request(FABLE), response(FABLE)])
+        for source in ("startup", "resume", "compact", "clear"):
+            self.assertIsNone(self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": source}), source)
+        self.assertIsNone(self.switch(FABLE, from_model=SONNET))
+        self.assertIsNone(self.switch(SONNET, from_model=OPUS))
+
+    def test_the_effort_question_still_asks_once(self):
+        self.say("/orchestra:conduct-codex")
+        self.set_transcript([at_effort(OPUS, "low")])
+        read = self.main("Read", {"file_path": "a"})
+        self.assertEqual(self.verdict("require_skill.py", read), "deny")
+        self.assertEqual(self.verdict("require_skill.py", read), "allow")
+        self.say("/orchestra:conduct-agy")
+        self.assertEqual(self.verdict("require_skill.py", read), "deny")
+        self.set_transcript([at_effort(OPUS, "high")])
+        self.say("/orchestra:conduct-codex")
+        self.assertEqual(self.verdict("require_skill.py", read), "allow")
+        self.set_transcript([at_effort(SONNET, "low")])
+        self.assertEqual(self.verdict("require_skill.py", read), "allow")
+
+    def test_the_mode_is_per_session(self):
+        self.set_mode("codex", "session-2")
+        self.assertEqual(self.write_src(), "deny")
 
 
 class RequireSkillTest(HookTest):

@@ -130,10 +130,12 @@ Three things are instructions only. No hook checks whether a request needs no ju
 
 ```bash
 python3 tests/test_hooks.py
+python3 tests/test_worker.py
+python3 tests/test_audit.py
 claude plugin validate .
 ```
 
-`tests/test_hooks.py` feeds each hook script JSON shaped like what Claude Code sends and checks the verdict. It starts no session, so it makes no model calls.
+`tests/test_hooks.py` feeds each hook script JSON shaped like what Claude Code sends and checks the verdict. `tests/test_worker.py` runs `scripts/worker.py` against a fake `codex` on the PATH. `tests/test_audit.py` audits transcripts written by the test. None of them starts a session or calls a model.
 
 ## What has been verified
 

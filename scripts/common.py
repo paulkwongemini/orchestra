@@ -289,25 +289,44 @@ def main_effort(data, max_bytes=16 * 1024 * 1024):
         window *= 4
 
 
-def _on_file(data):
+# The conductor's modes. In `claude` the workers are Claude subagents and the hooks guard the
+# work. In the CLI modes the workers are runs of another vendor's CLI, and the hooks step
+# aside: the conductor keeps the rules by its instructions alone.
+MODES = ("claude", "codex", "agy")
+CLI_MODES = ("codex", "agy")
+
+
+def _mode_file(data):
     folder = os.path.join(state_dir(), "sessions")
     os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".on")
+    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".mode")
 
 
-def set_enabled(data, enabled):
-    """Record that the user turned conductor mode on, or off, for this session. It is off until turned on."""
+def set_mode(data, mode):
+    """Record the conductor mode the user turned on for this session, or None for off. It is off until turned on."""
     try:
-        if enabled:
-            open(_on_file(data), "w").close()
-        elif os.path.exists(_on_file(data)):
-            os.remove(_on_file(data))
+        if mode in MODES:
+            with open(_mode_file(data), "w", encoding="utf-8") as f:
+                f.write(mode)
+        elif os.path.exists(_mode_file(data)):
+            os.remove(_mode_file(data))
     except OSError:
         pass
 
 
-def is_enabled(data):
-    return os.path.exists(_on_file(data))
+def session_mode(data):
+    """The session's conductor mode, or None when it is off."""
+    try:
+        with open(_mode_file(data), encoding="utf-8") as f:
+            mode = f.read().strip()
+    except OSError:
+        return None
+    return mode if mode in MODES else None
+
+
+def in_cli_mode(data):
+    """Whether a CLI mode is on. Every guard then steps aside."""
+    return session_mode(data) in CLI_MODES
 
 
 def _effort_file(data):
@@ -417,10 +436,15 @@ def active_work(data):
     return unit if found == unit and not rest else None
 
 
+def main_conducts(data):
+    """True for the main conversation of a session in any conductor mode, while it runs on a Fable or an Opus model."""
+    return not is_subagent(data) and session_mode(data) is not None and bool(main_model_can_conduct(data))
+
+
 def main_is_conductor(data):
-    """True for the main conversation of a session in which the user turned conductor mode on,
-    while it runs on a Fable or an Opus model."""
-    return not is_subagent(data) and is_enabled(data) and bool(main_model_can_conduct(data))
+    """True for the main conversation of a session in the `claude` conductor mode, while it runs
+    on a Fable or an Opus model. This is the session the guards act in."""
+    return main_conducts(data) and session_mode(data) == "claude"
 
 
 # ---------------------------------------------------------------- paths

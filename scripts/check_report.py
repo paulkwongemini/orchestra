@@ -309,6 +309,8 @@ def remove(path):
 
 def main():
     data = c.read_input()
+    if c.in_cli_mode(data):
+        c.allow()  # a CLI mode is on: the conductor keeps the rules by its instructions alone
     role = c.bare(data.get("agent_type"))
     if role not in c.ROSTER:
         c.allow()  # the conductor's own internal agents and agents off the roster are left alone
