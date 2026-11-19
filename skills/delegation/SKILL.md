@@ -6,7 +6,7 @@ user-invocable: false
 
 # Choosing the subagent and the effort level
 
-These rules select the model and effort of the Opus and Sonnet subagents that carry out tasks. Work that meets the conditions under "Haiku calls" in your instructions is not a task: it goes to a Haiku subagent directly, with no task spec and none of the steps below. Check that first, for every piece of work. The user sets the Fable conductor's effort directly in the UI, using the control below the prompt input. Orchestra does not change the conductor's effort.
+These rules select the model and effort of the Opus and Sonnet subagents that carry out tasks. Work that meets the conditions under "Haiku calls" in your instructions is not a task: it goes to a Haiku subagent directly, with no task spec and none of the steps below. Check that first, for every piece of work. The user sets the conductor's effort directly in the UI, using the control below the prompt input, whether the conductor runs on Fable or on Opus. Orchestra does not change the conductor's effort.
 
 Use this before every task's initial delegation and again for its second rework round, using the current task spec and review history. The first rework round goes back to the same subagent with its model and effort unchanged; it needs no new selection. Decide in three steps: the kind of work, then the model, then the effort level. Do not pick by how hard the task feels. Answer the questions below from the task spec and review history.
 

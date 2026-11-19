@@ -24,11 +24,15 @@ def fork_verdict(model, tmp):
     transcript = os.path.join(tmp, model + ".jsonl")
     with open(transcript, "w", encoding="utf-8") as f:
         f.write(json.dumps({"type": "api-request", "params": {"model": model}}) + "\n")
+    session = "doctor-" + model
+    # Conductor mode is on in the test session, as after `/orchestra:conduct`.
+    os.makedirs(os.path.join(tmp, "sessions"), exist_ok=True)
+    open(os.path.join(tmp, "sessions", session + ".on"), "w").close()
     payload = {
         "hook_event_name": "PreToolUse",
         "tool_name": "Agent",
         "tool_input": {"subagent_type": "fork", "prompt": "check"},
-        "session_id": "doctor-" + model,
+        "session_id": session,
         "transcript_path": transcript,
     }
     env = dict(os.environ, CLAUDE_PLUGIN_DATA=tmp)
@@ -46,10 +50,12 @@ def fork_verdict(model, tmp):
 
 
 def hook_selftest():
-    """A fork must be refused in a Fable session and left alone in a session on another model."""
+    """In conductor mode, a fork must be refused on Fable and Opus and left alone on another model."""
     try:
         with tempfile.TemporaryDirectory(prefix="orchestra-doctor-") as tmp:
-            return fork_verdict("claude-fable-5-2", tmp) == "deny" and fork_verdict("claude-sonnet-5-5", tmp) == "allow"
+            return (fork_verdict("claude-fable-5-2", tmp) == "deny"
+                    and fork_verdict("claude-opus-5-5", tmp) == "deny"
+                    and fork_verdict("claude-sonnet-5-5", tmp) == "allow")
     except Exception:
         return False
 
@@ -76,8 +82,8 @@ def main():
 
     if hook_selftest():
         lines.append(
-            "%s Hook scripts work. A fork call was refused in a Fable session and left alone in a "
-            "Sonnet session." % OK
+            "%s Hook scripts work. In conductor mode, a fork call was refused in a Fable and an "
+            "Opus session and left alone in a Sonnet session." % OK
         )
     else:
         lines.append(
@@ -85,8 +91,9 @@ def main():
         )
 
     lines.append(
-        "%s Mode: a session whose model is a Fable model is a conductor session. A session on any "
-        "other model is an ordinary session." % OK
+        "%s Mode: conductor mode is off when a session starts. `/orchestra:conduct` turns it on "
+        "for the session, and it applies while the session runs on a Fable or an Opus model. "
+        "`/orchestra:disable` turns it off." % OK
     )
 
     if any(s.get("disableAllHooks") for _name, s in layers):

@@ -1,19 +1,19 @@
 # orchestra
 
-A Claude Code plugin that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents take the work that needs no judgment. As the work goes on, Fable keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
+A Claude Code plugin that keeps the main model in the conductor role when you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents take the work that needs no judgment. As the work goes on, the conductor keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
 
-Orchestra chooses the model and effort for its Opus and Sonnet subagents. You set the Fable conductor's effort yourself using the control below the prompt input. Orchestra does not change the conductor's effort.
+Orchestra chooses the model and effort for its Opus and Sonnet subagents. You set the conductor's effort yourself using the control below the prompt input. Orchestra does not change the conductor's effort.
 
 ## Objectives
 
 Orchestra sets the model and the effort level for each piece of work by Anthropic's official prompting guides for [Fable 5.2](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2), [Opus 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5), and [Sonnet 5.5](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5). It has two goals:
 
 - **Cut needless token use.** No task runs on a larger model or a higher effort level than it needs.
-- **Let each model do what it does best.** Fable understands what you want, designs, and reviews. Opus and Sonnet implement. Haiku finds, reads, and makes mechanical edits.
+- **Let each model do what it does best.** The conductor, Fable or Opus, understands what you want, designs, and reviews. Opus and Sonnet implement. Haiku finds, reads, and makes mechanical edits.
 
 ## Workflow
 
-![The Orchestra workflow: you, Fable as the conductor, and an Opus or Sonnet subagent](docs/workflow.svg)
+![The Orchestra workflow: you, the conductor, and an Opus or Sonnet subagent](docs/workflow.svg)
 
 ## Install
 
@@ -40,35 +40,40 @@ claude --plugin-dir /path/to/orchestra
 
 ## Usage
 
-After you install the plugin, the model of a chat decides its mode.
+Conductor mode is off when a chat starts, and the plugin does nothing. Turn it on for a chat with `/orchestra:conduct`. You can put the request on the same line, as in `/orchestra:conduct fix the login bug`.
 
-- **The model is Fable: conductor mode.** Fable works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself, except the files you approve for it in the brief. See "Files the conductor writes itself". Each time a group of related tasks is done, it has the project's documents brought up to date.
+While conductor mode is on, the model of the chat decides what happens.
+
+- **The model is Fable or Opus: the model is the conductor.** It works out what you want, delegates the implementation to subagents, and reviews their results. It does not edit your files itself, except the files you approve for it in the brief. See "Files the conductor writes itself". Each time a group of related tasks is done, it has the project's documents brought up to date. The subagents are the same for both conductors.
 - **The model is anything else: ordinary mode.** The plugin does nothing.
 
 Change the model in the middle of a chat, and the mode changes with it.
 
-In conductor mode, Fable decides for each message whether to answer it directly or to treat it as work. It answers directly only a question it can settle from the conversation, your project's files, and the web. Anything that asks for a result, or that needs an action you would have to allow, such as reading a server's logs over ssh, is work. Work starts with the interview: Fable asks what you want, and which kinds of action it may take, before it runs anything that needs your approval.
+The conductor decides for each message whether to answer it directly or to treat it as work. It answers directly only a question it can settle from the conversation, your project's files, and the web. Anything that asks for a result, or that needs an action you would have to allow, such as reading a server's logs over ssh, is work. Work starts with the interview: the conductor asks what you want, and which kinds of action it may take, before it runs anything that needs your approval.
 
-Conductor mode is meant for work of some size. For a small task, switch the chat to another model and do it there.
+Conductor mode is meant for work of some size. For a small task, leave it off. If it is already on, turn it off with `/orchestra:disable`, or switch the chat to Sonnet for the task.
 
-For the Fable conductor, we recommend starting at `high`, following [Anthropic's Claude Fable 5.2 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#calibrate-effort). Choose the level to suit the work:
+For a Fable conductor, we recommend starting at `high`, following [Anthropic's Claude Fable 5.2 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#calibrate-effort). Choose the level to suit the work:
 
 - **`high`**: the recommended starting point for complex coding, research, and extended autonomous work.
 - **`medium`**: for interactive development and routine tasks when it maintains the quality you need with less time and fewer tokens.
 - **`xhigh`**: for especially demanding, extended tasks only when your evaluations show an improvement worth the additional time and token use.
 
-Set the conductor's effort yourself using the control below the prompt input. Orchestra does not change it.
+For an Opus conductor, use `high` or above. When an Opus conductor runs at `low` or `medium`, it stops at its first tool call at that level, recommends `high` or above, and asks whether to go on. This happens when you turn conductor mode on at a low level, and also when you lower the effort later in the chat. Say to go on, and it works at the level you chose without asking again. It asks again only when you change to the other low level or turn conductor mode on again.
 
-To use Fable in ordinary mode, turn conductor mode off for that chat.
+Set the conductor's effort yourself using the control below the prompt input. Orchestra does not change it.
 
 | Command | What it does |
 |---|---|
-| `/orchestra:disable` | Turns conductor mode off for this chat. Fable works as an ordinary session |
-| `/orchestra:enable` | Turns conductor mode back on for this chat |
-| `/orchestra:conductor` | Turns conductor mode back on and loads the conductor's instructions right away |
+| `/orchestra:conduct` | Turns conductor mode on for this chat |
+| `/orchestra:enable` | The same as `/orchestra:conduct` |
+| `/orchestra:conductor` | Turns conductor mode on and loads the conductor's instructions right away. Use it on Fable or Opus: on another model it puts the instructions into a chat that stays ordinary |
+| `/orchestra:disable` | Turns conductor mode off for this chat. The chat works as an ordinary session |
 | `/orchestra:setup` | Checks the environment and lists the work folders. Changes nothing |
 
-The commands apply to the chat you type them in. Only you can turn the mode on or off. Fable cannot do it for itself.
+The commands apply to the chat you type them in. Only you can turn the mode on or off. The conductor cannot do it for itself.
+
+The mode is kept through compaction. Whether it is kept through `/clear` has not been checked. If the conductor does not come back after `/clear`, type `/orchestra:conduct` again.
 
 ## Pre-approved actions
 
@@ -156,10 +161,12 @@ These rules are instructions. No hook enforces them.
 
 | Kind | Name | Role |
 |---|---|---|
-| Skill | `orchestra:conductor` | The conductor's instructions. Fable loads it at the start of a chat in conductor mode, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
-| Skill | `orchestra:interview` | How Fable finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, which files the conductor may write itself, and whether the work may use a worktree when it needs one. Fable loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
-| Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. Fable loads it before its first delegation, and a hook refuses a delegation until it is loaded |
-| Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. Fable loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
+| Skill | `orchestra:conduct` | Turns conductor mode on for the chat. `orchestra:enable` does the same, and `orchestra:disable` turns it off. Only you can run them |
+| Skill | `orchestra:setup` | Checks the environment and lists the work folders. Changes nothing. Only you can run it |
+| Skill | `orchestra:conductor` | The conductor's instructions. The conductor loads it when you turn conductor mode on, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
+| Skill | `orchestra:interview` | How the conductor finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, which files the conductor may write itself, and whether the work may use a worktree when it needs one. The conductor loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
+| Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. The conductor loads it before its first delegation, and a hook refuses a delegation until it is loaded |
+| Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. The conductor loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
 | Subagent | `orchestra:opus-analyst` | Opus, effort high. Architecture review, deep analysis. Read-only |
 | Subagent | `orchestra:sonnet-builder` | Sonnet, effort medium. Simple code, repetitive work |
@@ -173,11 +180,11 @@ The enforcement below applies in a conductor session.
 
 | Principle | Enforcement | File |
 |---|---|---|
-| 1. Fable is the orchestrator | Instructions | `skills/conductor/SKILL.md` |
+| 1. The main model, Fable or Opus, is the orchestrator once you turn conductor mode on | Instructions. Conductor mode is off until `/orchestra:conduct`, and only a command you type changes it | `skills/conductor/SKILL.md` |
 | 2. Understand the intent before working | Instructions (`skills/conductor/SKILL.md`, `skills/interview/SKILL.md`): each message is judged anew as a direct answer or as work, the interview comes before any action that needs your approval, one question per turn, then the brief. Implementation cannot be delegated without a brief, or before the user has replied since the brief last changed | `scripts/guard_agent.py` |
 | 3. Stop and ask when an exception comes up | Instructions. A command that changes data, dependencies, repository state, or something outside this machine runs without a question only when the brief pre-approves its kind. Otherwise it is refused or goes to you. See "Pre-approved actions" | `skills/interview/SKILL.md`, `scripts/guard_main.py` |
 | 4. Tasks run on Opus or Sonnet, with model and effort chosen by the delegation rules. Haiku runs only work that needs no judgment | Agent types off the roster are refused. So is a model that does not belong to the subagent: `haiku` for an Opus or Sonnet subagent, any other model for a Haiku subagent. The choice between Opus and Sonnet and the effort level follow written rules (`skills/delegation/SKILL.md`), which must be loaded before a task is delegated. When Haiku may be used is an instruction. See "Haiku for work that needs no judgment" | `scripts/guard_agent.py` |
-| 5. No Fable subagents | Forks, `model: fable`, calls without a type, and workflows are refused | `scripts/guard_agent.py` |
+| 5. No Fable subagents, and no copies of the conductor | Forks, `model: fable` or `inherit`, calls without a type, and workflows are refused, whether the conductor is Fable or Opus | `scripts/guard_agent.py` |
 | 6. Subagents do not start subagents, except a Haiku subagent | An `Agent` call inside a subagent is refused unless it starts `haiku-scout` or `haiku-editor` with a prompt in the fixed form. A read-only subagent may start only `haiku-scout`. A Haiku subagent has no `Agent` tool, and a call from one is refused | `agents/*.md`, `scripts/guard_agent.py` |
 | 7. Review the result independently, then read the report | A `DONE` handback requires passing verification records. Reports arrive only as files. A report does not open without a review record. A `haiku-editor` returns no account of its work: only a status, the changed files, and the exit code of the check | `scripts/check_report.py`, `scripts/report_gate.py` |
 | 8. The conductor waits for delegated work instead of doing it | Instructions. The conductor's Edit, Write, and file-changing shell commands are refused, except for the files that the brief lists on its `Conductor writes:` line once you have confirmed it. The shell check catches the common ways to change a file and sends the work back to delegation. It is not a sandbox | `skills/conductor/SKILL.md`, `scripts/guard_main.py` |

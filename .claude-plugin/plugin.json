@@ -1,8 +1,8 @@
 {
   "name": "orchestra",
   "displayName": "Orchestra",
-  "version": "0.1.8",
-  "description": "A harness that keeps Fable in the conductor role. Fable designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents do the work that needs no judgment.",
+  "version": "0.2.0",
+  "description": "A harness that keeps the main model in the conductor role once you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents do the work that needs no judgment.",
   "author": {
     "name": "paulkwongemini",
     "url": "https://github.com/paulkwongemini"

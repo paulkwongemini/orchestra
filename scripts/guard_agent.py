@@ -3,7 +3,8 @@
 
 Principle 2  No implementation is delegated before a brief exists and the user has spoken since it last changed.
 Principle 4  No model below Sonnet, except for the two Haiku subagents, which run only on Haiku.
-Principle 5  No subagent runs on Fable. A fork counts.
+Principle 5  No subagent runs on Fable or on the main model. A fork and a subagent without a
+             type count, because both run on the main model.
 Principle 6  A subagent starts no other subagent, except that `opus-engineer`, `sonnet-builder` and
              `sonnet-writer` may start `haiku-scout` and `haiku-editor`, and `opus-analyst` may
              start `haiku-scout`. A Haiku subagent starts nothing, and no subagent runs a Workflow.
@@ -16,8 +17,9 @@ needs no task spec and no skill beyond the conductor skill, and it does not chan
 work folder. A `haiku-editor` call from the conductor needs the brief of the active work folder
 to be confirmed, by the same strict test the pre-approvals use.
 
-The main-conversation rules apply only in a conductor session, which is a session whose
-model is a Fable model. Calls inside a subagent that is not on the roster are left alone.
+The main-conversation rules apply only in a conductor session: one in which the user turned
+conductor mode on, while it runs on a Fable or an Opus model. The roster is the same for both.
+Calls inside a subagent that is not on the roster are left alone.
 """
 import os
 import re
@@ -30,10 +32,10 @@ from guard_main import brief_approval  # noqa: E402
 TASK_REF = re.compile(r"\.orchestra/([^\s/`'\"]+)/tasks/([A-Za-z0-9][\w.\-]*\.md)")
 EXAMPLE = "`.orchestra/<work>/tasks/T01-short-name.md`"
 
-FABLE_ADVICE = (
-    "If the work needs Fable-level judgment, make that judgment yourself, write it into the "
-    "task spec, and leave only the execution to Opus. If the decision goes beyond the brief, "
-    "stop and ask the user."
+JUDGMENT_ADVICE = (
+    "If the work needs the conductor's own judgment, make that judgment yourself, write it into "
+    "the task spec, and leave only the execution to a roster subagent. If the decision goes "
+    "beyond the brief, stop and ask the user."
 )
 
 
@@ -42,7 +44,7 @@ def check_model(model):
     if not model:
         return
     if c.is_fable(model) or model == "inherit":
-        c.deny("A subagent cannot run on Fable (Principle 5). " + FABLE_ADVICE)
+        c.deny("A subagent cannot run on Fable or inherit the main model (Principle 5). " + JUDGMENT_ADVICE)
     if "haiku" in model:
         c.deny(
             "This subagent does not run below Sonnet (Principle 4). For a very simple task, give "
@@ -225,13 +227,13 @@ def main():
     stype = str(ti.get("subagent_type") or "").strip()
     if not stype:
         c.deny(
-            "A subagent started without a type runs on the main model, Fable (Principle 5). "
-            "Choose one from the roster: " + c.roster_text()
+            "A subagent started without a type runs on the main model, the conductor's own model "
+            "(Principle 5). Choose one from the roster: " + c.roster_text()
         )
     if stype.lower() == "fork":
         c.deny(
-            "A fork is a copy of yourself running on Fable, so it cannot be created (Principle 5). "
-            + FABLE_ADVICE
+            "A fork is a copy of yourself on the main model, so it cannot be created (Principle 5). "
+            + JUDGMENT_ADVICE
         )
     name = c.bare(stype)
     foreign = ":" in stype and not stype.startswith(c.PLUGIN + ":")

@@ -2,7 +2,8 @@
 """PreToolUse(Edit|Write|NotebookEdit|Bash): enforce who may write what.
 
 Principle 8  The conductor does not implement.
-  - Conductor (the main conversation of a session on a Fable model): writes its own documents
+  - Conductor (the main conversation of a session in conductor mode on a Fable or an Opus
+    model): writes its own documents
     inside `.orchestra/`, and outside it only the project files that the brief of the session's
     active work folder lists on the `Conductor writes:` line under `## Decision rights`, once
     the user has spoken since the brief last changed. An entry names one file: a glob, a
@@ -46,7 +47,7 @@ import common as c  # noqa: E402
 
 WHY = {
     "conductor": (
-        "This session runs on a Fable model, so you are the conductor, and the conductor does not "
+        "Conductor mode is on in this session, so you are the conductor, and the conductor does not "
         "implement (Principle 8). Write a task spec and delegate this change to a subagent. You can "
         "write the brief, task specs, review records, and the decision log inside `.orchestra/` "
         "directly with the Write tool. If you have not loaded your instructions yet, invoke the "

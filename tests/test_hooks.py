@@ -171,11 +171,14 @@ class HookTest(unittest.TestCase):
         os.makedirs(self.proj)
         os.makedirs(self.state)
         # By default a test runs in a new session on Fable that has just sent its first request,
-        # and the delegation rules and the documentation rules are already loaded.
+        # the user has turned conductor mode on, and the delegation rules and the documentation
+        # rules are already loaded.
         self.set_transcript([request(FABLE)])
+        self.on = os.path.join(self.state, "sessions", "session-1.on")
         self.rules = os.path.join(self.state, "sessions", "session-1.delegation")
         self.doc_rules = os.path.join(self.state, "sessions", "session-1.documentation")
         os.makedirs(os.path.dirname(self.rules))
+        open(self.on, "w").close()
         open(self.rules, "w").close()
         open(self.doc_rules, "w").close()
 
@@ -247,6 +250,10 @@ class HookTest(unittest.TestCase):
         """Whether the main conversation may write a source file. Denied only in a conductor session."""
         return self.verdict("guard_main.py", self.main("Write", {"file_path": "src/app.py", "content": "x"}))
 
+    def turn_on(self, session):
+        """Turn conductor mode on for another session, as `/orchestra:conduct` does."""
+        open(os.path.join(self.state, "sessions", session + ".on"), "w").close()
+
     def switch(self, to_model, from_model=SONNET, source="picker"):
         payload = {"hook_event_name": "PostModelSwitch", "from_model": from_model, "to_model": to_model,
                    "requested_model": to_model, "source": source}
@@ -254,7 +261,8 @@ class HookTest(unittest.TestCase):
 
 
 class ModeTest(HookTest):
-    """A session is a conductor session exactly while its main conversation runs on a Fable model."""
+    """With conductor mode on, a session is a conductor session exactly while its main
+    conversation runs on a Fable or an Opus model."""
 
     def test_first_request_of_a_new_session(self):
         self.set_transcript([request(FABLE)])
@@ -262,20 +270,30 @@ class ModeTest(HookTest):
         self.set_transcript([request(SONNET)])
         self.assertEqual(self.write_src(), "allow")
         self.set_transcript([request(OPUS)])
+        self.assertEqual(self.write_src(), "deny")
+        self.set_transcript([request("claude-haiku-5-5")])
         self.assertEqual(self.write_src(), "allow")
 
     def test_mythos_counts_as_fable(self):
         self.set_transcript([request("claude-mythos-5-2")])
         self.assertEqual(self.write_src(), "deny")
 
+    def test_opus_conducts_with_the_same_roster(self):
+        self.set_transcript([request(OPUS), response(OPUS)])
+        self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "fork"})), "deny")
+        self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"prompt": "x"})), "deny")
+        self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "general-purpose"})), "deny")
+
     def test_last_response_decides(self):
         self.set_transcript([request(FABLE), response(FABLE)])
         self.assertEqual(self.write_src(), "deny")
-        self.set_transcript([request(OPUS), response(OPUS)])
+        self.set_transcript([request(SONNET), response(SONNET)])
         self.assertEqual(self.write_src(), "allow")
 
     def test_request_in_flight_turns_the_harness_on(self):
-        self.set_transcript([request(OPUS), response(OPUS), request(FABLE)])
+        self.set_transcript([request(SONNET), response(SONNET), request(FABLE)])
+        self.assertEqual(self.write_src(), "deny")
+        self.set_transcript([request(SONNET), response(SONNET), request(OPUS)])
         self.assertEqual(self.write_src(), "deny")
 
     def test_request_in_flight_turns_the_harness_off(self):
@@ -320,6 +338,7 @@ class ModeTest(HookTest):
         self.assertEqual(self.write_src(), "allow")
 
     def test_sessions_do_not_share_a_recorded_switch(self):
+        self.turn_on("session-2")
         self.set_transcript(None)
         self.switch(FABLE)
         payload = self.main("Write", {"file_path": "src/app.py"})
@@ -328,10 +347,25 @@ class ModeTest(HookTest):
 
 
 class SwitchTest(HookTest):
-    """The user can turn conductor mode off and on for one session."""
+    """Conductor mode is off when a session starts. The user turns it on and off for one session."""
 
     def say(self, prompt, session="session-1"):
         return self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": prompt, "session_id": session})
+
+    def test_off_when_a_session_starts(self):
+        os.remove(self.on)
+        for model in (FABLE, OPUS):
+            self.set_transcript([request(model)])
+            self.assertEqual(self.write_src(), "allow", model)
+            self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "fork"})), "allow", model)
+            self.assertEqual(self.verdict("require_skill.py", self.main("Read", {"file_path": "a"})), "allow", model)
+
+    def test_each_command_turns_it_on(self):
+        for command in ("/orchestra:conduct", "/orchestra:enable", "/orchestra:conductor fix the login bug"):
+            os.remove(self.on)
+            self.assertEqual(self.write_src(), "allow", command)
+            self.say(command)
+            self.assertEqual(self.write_src(), "deny", command)
 
     def test_disable_and_enable(self):
         self.assertEqual(self.write_src(), "deny")
@@ -339,6 +373,9 @@ class SwitchTest(HookTest):
         self.assertEqual(self.write_src(), "allow")
         self.assertEqual(self.verdict("guard_agent.py", self.main("Agent", {"subagent_type": "fork"})), "allow")
         self.say("/orchestra:enable")
+        self.assertEqual(self.write_src(), "deny")
+        self.say("/orchestra:disable")
+        self.say("/orchestra:conduct")
         self.assertEqual(self.write_src(), "deny")
 
     def test_explicit_conductor_command_turns_it_back_on(self):
@@ -351,7 +388,9 @@ class SwitchTest(HookTest):
             self.run_hook("session.py", {"hook_event_name": "UserPromptExpansion", "command_name": name,
                                          "command_source": "plugin", "prompt": "/orchestra:disable"})
             self.assertEqual(self.write_src(), "allow", name)
-            self.say("/orchestra:enable")
+            self.run_hook("session.py", {"hook_event_name": "UserPromptExpansion", "command_name": "orchestra:conduct",
+                                         "command_source": "plugin", "prompt": "/orchestra:conduct"})
+            self.assertEqual(self.write_src(), "deny", name)
         self.run_hook("session.py", {"hook_event_name": "UserPromptExpansion", "command_name": "other:disable",
                                      "command_source": "plugin", "prompt": "/other:disable"})
         self.assertEqual(self.write_src(), "deny")
@@ -361,15 +400,23 @@ class SwitchTest(HookTest):
         self.say("/orchestra:disabled")
         self.say("/other:disable")
         self.assertEqual(self.write_src(), "deny")
+        os.remove(self.on)
+        self.say("please run /orchestra:conduct for me")
+        self.say("/orchestra:conductor-x")
+        self.say("/other:conduct")
+        self.assertEqual(self.write_src(), "allow")
 
-    def test_disable_is_per_session(self):
+    def test_mode_is_per_session(self):
         self.say("/orchestra:disable", session="session-2")
         self.assertEqual(self.write_src(), "deny")
+        os.remove(self.on)
+        self.say("/orchestra:conduct", session="session-2")
+        self.assertEqual(self.write_src(), "allow")
 
     def test_disabled_session_gets_no_notes(self):
         self.say("/orchestra:disable")
         self.assertIsNone(self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "compact"}))
-        self.assertIsNone(self.switch(FABLE, from_model=OPUS))
+        self.assertIsNone(self.switch(FABLE, from_model=SONNET))
         self.assertEqual(self.write_src(), "allow")
 
 
@@ -419,6 +466,7 @@ class RequireSkillTest(HookTest):
         self.assertEqual(self.verdict("require_skill.py", self.sub("sonnet-builder", "Read", {"file_path": "a"})), "allow")
 
     def test_loading_is_per_session(self):
+        self.turn_on("session-2")
         self.load()
         self.assertEqual(self.call(session_id="session-2"), "deny")
 
@@ -436,6 +484,95 @@ class RequireSkillTest(HookTest):
         self.load()
         self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "resume"})
         self.assertEqual(self.call(), "allow")
+
+
+def at_effort(model, effort):
+    """A request sent at an effort level, as Claude Code records it."""
+    entry = request(model)
+    entry["params"]["output_config"] = {"effort": effort}
+    return entry
+
+
+class EffortTest(HookTest):
+    """An Opus conductor at a low effort level is told once to recommend High or above."""
+
+    def call(self, tool="Read", tool_input=None):
+        return self.run_hook("require_skill.py", self.main(tool, tool_input or {"file_path": "src/app.py"}))
+
+    def decision(self, out):
+        return out["hookSpecificOutput"]["permissionDecision"] if out else "allow"
+
+    def say(self, prompt):
+        self.run_hook("session.py", {"hook_event_name": "UserPromptSubmit", "prompt": prompt})
+
+    def test_low_and_medium_are_asked_about_once(self):
+        for effort in ("low", "medium", "LOW"):
+            with self.subTest(effort=effort):
+                self.say("/orchestra:conduct")
+                self.set_transcript([at_effort(OPUS, effort)])
+                out = self.call("Skill", {"skill": "orchestra:conductor"})
+                self.assertEqual(self.decision(out), "deny")
+                reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+                self.assertIn("High effort or above", reason)
+                self.assertIn("`%s`" % effort.lower(), reason)
+                # The user answered. Whatever they said, the work goes on at this level.
+                self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+                self.assertEqual(self.decision(self.call()), "allow")
+                self.assertEqual(self.decision(self.call()), "allow")
+
+    def test_high_and_above_are_not_asked_about(self):
+        for effort in ("high", "xhigh", "max"):
+            with self.subTest(effort=effort):
+                self.set_transcript([at_effort(OPUS, effort)])
+                self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+
+    def test_unknown_effort_is_not_asked_about(self):
+        self.set_transcript([request(OPUS)])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+
+    def test_fable_is_not_asked_about(self):
+        self.set_transcript([at_effort(FABLE, "low")])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+
+    def test_ordinary_and_disabled_sessions_are_not_asked_about(self):
+        self.set_transcript([at_effort(SONNET, "low")])
+        self.assertEqual(self.decision(self.call()), "allow")
+        self.set_transcript([at_effort(OPUS, "low")])
+        self.say("/orchestra:disable")
+        self.assertEqual(self.decision(self.call()), "allow")
+
+    def test_the_newest_request_decides(self):
+        self.set_transcript([at_effort(OPUS, "high"), response(OPUS), at_effort(OPUS, "low")])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "deny")
+
+    def test_a_raised_effort_needs_no_answer(self):
+        self.set_transcript([at_effort(OPUS, "low")])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "deny")
+        self.set_transcript([at_effort(OPUS, "low"), response(OPUS), at_effort(OPUS, "high")])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+        self.assertEqual(self.decision(self.call()), "allow")
+
+    def test_another_low_level_or_turning_it_on_again_asks_again(self):
+        self.set_transcript([at_effort(OPUS, "medium")])
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "deny")
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+        self.set_transcript([at_effort(OPUS, "low")])
+        self.assertEqual(self.decision(self.call()), "deny")
+        self.assertEqual(self.decision(self.call()), "allow")
+        self.say("/orchestra:conduct")
+        self.assertEqual(self.decision(self.call()), "deny")
+
+    def test_compaction_does_not_ask_again(self):
+        self.set_transcript([at_effort(OPUS, "low")])
+        self.call("Skill", {"skill": "orchestra:conductor"})
+        self.call("Skill", {"skill": "orchestra:conductor"})
+        self.run_hook("session.py", {"hook_event_name": "SessionStart", "source": "compact"})
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "allow")
+
+    def test_tool_search_is_never_stopped(self):
+        self.set_transcript([at_effort(OPUS, "low")])
+        self.assertEqual(self.decision(self.call("ToolSearch", {"query": "select:Skill"})), "allow")
+        self.assertEqual(self.decision(self.call("Skill", {"skill": "orchestra:conductor"})), "deny")
 
 
 class DelegationRulesTest(HookTest):
@@ -603,27 +740,42 @@ class SessionNoteTest(HookTest):
         out = self.run_hook("session.py", payload)
         return out["hookSpecificOutput"]["additionalContext"] if out else None
 
-    def test_new_session_gets_a_note_for_both_cases(self):
+    def test_new_session_gets_no_note(self):
+        os.remove(self.on)
+        for transcript in (None, [request(FABLE), response(FABLE)], [request(OPUS), response(OPUS)]):
+            self.set_transcript(transcript)
+            self.assertIsNone(self.note({"hook_event_name": "SessionStart", "source": "startup"}))
+
+    def test_unknown_model_with_the_mode_on_gets_a_note_for_both_cases(self):
         self.set_transcript(None)
-        text = self.note({"hook_event_name": "SessionStart", "source": "startup"})
-        self.assertIn("If you are running on a Fable model", text)
+        text = self.note({"hook_event_name": "SessionStart", "source": "resume"})
+        self.assertIn("If you are running on a Fable or an Opus model", text)
         self.assertIn("any other model", text)
         self.assertIn("orchestra:conductor", text)
 
-    def test_known_fable_session_gets_the_conductor_note(self):
-        self.set_transcript([request(FABLE), response(FABLE)])
-        text = self.note({"hook_event_name": "SessionStart", "source": "resume"})
-        self.assertIn("This session runs on a Fable model", text)
-        self.assertNotIn("any other model", text)
+    def test_known_conductor_session_gets_the_conductor_note(self):
+        for model in (FABLE, OPUS):
+            self.set_transcript([request(model), response(model)])
+            text = self.note({"hook_event_name": "SessionStart", "source": "resume"})
+            self.assertIn("turned conductor mode on", text, model)
+            self.assertNotIn("any other model", text, model)
 
     def test_known_ordinary_session_gets_no_note(self):
         self.set_transcript([request(SONNET), response(SONNET)])
         self.assertIsNone(self.note({"hook_event_name": "SessionStart", "source": "resume"}))
 
     def test_switch_notes(self):
-        self.assertIn("now runs on a Fable model", self.switch(FABLE, from_model=OPUS)["hookSpecificOutput"]["additionalContext"])
-        self.assertIn("no longer runs on a Fable model", self.switch(OPUS, from_model=FABLE)["hookSpecificOutput"]["additionalContext"])
-        self.assertIsNone(self.switch(OPUS, from_model=SONNET))
+        self.assertIn("now runs on a Fable or an Opus model", self.switch(FABLE, from_model=SONNET)["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("now runs on a Fable or an Opus model", self.switch(OPUS, from_model=SONNET)["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("no longer runs on a Fable or an Opus model", self.switch(SONNET, from_model=OPUS)["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.switch(OPUS, from_model=FABLE))
+        self.assertIsNone(self.switch(FABLE, from_model=OPUS))
+        self.assertIsNone(self.switch("claude-haiku-5-5", from_model=SONNET))
+
+    def test_switch_with_the_mode_off_gets_no_note(self):
+        os.remove(self.on)
+        self.assertIsNone(self.switch(FABLE, from_model=SONNET))
+        self.assertIsNone(self.switch(SONNET, from_model=OPUS))
 
     def test_restored_model_is_recorded_without_a_note(self):
         self.set_transcript(None)
@@ -727,7 +879,7 @@ class GuardAgentTest(HookTest):
         self.assertEqual(self.verdict("guard_agent.py", self.main("Workflow", {"name": "audit"})), "deny")
 
     def test_ordinary_session_is_left_alone(self):
-        self.set_transcript([request(OPUS)])
+        self.set_transcript([request(SONNET)])
         self.assertEqual(self.agent(subagent_type="fork", prompt="anything"), "allow")
         self.assertEqual(self.agent(prompt="anything"), "allow")
         self.assertEqual(self.verdict("guard_agent.py", self.main("Workflow", {"name": "audit"})), "allow")
@@ -1122,6 +1274,7 @@ class PreapprovalTest(HookTest):
 
     def test_sessions_do_not_share_the_active_folder(self):
         self.confirmed("Pre-approved: data")
+        self.turn_on("session-2")
         payload = self.main("Bash", {"command": "bin/rails db:migrate"})
         payload["session_id"] = "session-2"
         self.assertEqual(self.verdict("guard_main.py", payload), "deny")
@@ -1771,7 +1924,7 @@ class ReportGateTest(HookTest):
 
     def test_ordinary_session_is_not_gated(self):
         self.write(self.REPORT, REPORT_DONE)
-        self.set_transcript([request(OPUS), response(OPUS)])
+        self.set_transcript([request(SONNET), response(SONNET)])
         self.assertEqual(self.read(), "allow")
 
     def test_task_files_are_not_gated(self):

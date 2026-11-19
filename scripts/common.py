@@ -113,9 +113,22 @@ def is_subagent(data):
 
 
 def is_fable(model):
-    """Fable and Mythos are the same model tier. Both make a session a conductor session."""
+    """Fable and Mythos are the same model tier."""
     m = str(model or "").lower()
     return "fable" in m or "mythos" in m
+
+
+def is_opus(model):
+    return "opus" in str(model or "").lower()
+
+
+def is_conductor_model(model):
+    """A model that can conduct: Fable (or Mythos) and Opus."""
+    return is_fable(model) or is_opus(model)
+
+
+# Effort levels at which an Opus conductor is advised to run higher, and asked once.
+LOW_EFFORTS = ("low", "medium")
 
 
 def roster_text():
@@ -124,8 +137,9 @@ def roster_text():
 
 # ---------------------------------------------------------------- which model the main conversation runs on
 #
-# The harness applies only while the main conversation runs on a Fable model. A hook is not
-# told the model directly, so it is worked out from two places:
+# The harness applies only while the user has turned conductor mode on and the main
+# conversation runs on a Fable or an Opus model. A hook is not told the model directly, so it
+# is worked out from two places:
 #   - the session transcript: each response records its model, and each request records its
 #     model when it is sent, which is before the response and its tool calls exist
 #   - the PostModelSwitch hook, which records every model switch for the session
@@ -211,41 +225,116 @@ def _load_switch(data):
         return None
 
 
-def main_model_is_fable(data):
-    """True, False, or None when nothing is known yet (a session that has sent no request)."""
+def main_model(data):
+    """The model the main conversation runs on, or None when nothing is known yet (a session that has sent no request)."""
     last_model, last_time, in_flight = transcript_signals(data.get("transcript_path"))
-    switch = _load_switch(data)
-    settled = last_model
-    if switch and (last_time is None or switch.get("at", 0) > last_time):
-        settled = switch.get("model")  # a switch that is newer than the last response
-    if settled is None and in_flight is None:
-        return None
     # A request sent after the last response is the newest fact there is, so it decides.
     # A session continued on another model sends no switch event, and this is how it shows.
     if in_flight is not None:
-        return is_fable(in_flight)
-    return is_fable(settled)
+        return in_flight
+    switch = _load_switch(data)
+    if switch and (last_time is None or switch.get("at", 0) > last_time):
+        return switch.get("model") or None  # a switch that is newer than the last response
+    return last_model
 
 
-def _off_file(data):
+def main_model_can_conduct(data):
+    """True, False, or None when nothing is known yet."""
+    model = main_model(data)
+    return None if model is None else is_conductor_model(model)
+
+
+def main_effort(data, max_bytes=16 * 1024 * 1024):
+    """The effort level of the main conversation's newest request or response, lower case, or None.
+
+    Each request records the effort it was sent with, before its response and tool calls exist,
+    so a hook sees the effort that is in force for the call it is judging.
+    """
+    path = data.get("transcript_path")
+    try:
+        size = os.path.getsize(path)
+    except (OSError, TypeError):
+        return None
+    window = 256 * 1024
+    while True:
+        start = max(0, size - window)
+        try:
+            with open(path, "rb") as f:
+                f.seek(start)
+                lines = f.read().decode("utf-8", "replace").split("\n")
+        except OSError:
+            return None
+        if start > 0:
+            lines = lines[1:]
+        for line in reversed(lines):
+            if not _REQUEST.search(line) and not _ASSISTANT.search(line):
+                continue
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(entry, dict):
+                continue
+            effort = None
+            if entry.get("type") == "api-request":
+                params = entry.get("params")
+                config = params.get("output_config") if isinstance(params, dict) else None
+                effort = config.get("effort") if isinstance(config, dict) else None
+            elif entry.get("type") == "assistant" and not entry.get("isSidechain"):
+                effort = entry.get("effort")
+            if effort:
+                return str(effort).strip().lower()
+        if start == 0 or window >= max_bytes:
+            return None
+        window *= 4
+
+
+def _on_file(data):
     folder = os.path.join(state_dir(), "sessions")
     os.makedirs(folder, exist_ok=True)
-    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".off")
+    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".on")
 
 
-def set_disabled(data, disabled):
-    """Record that the user turned conductor mode off, or back on, for this session."""
+def set_enabled(data, enabled):
+    """Record that the user turned conductor mode on, or off, for this session. It is off until turned on."""
     try:
-        if disabled:
-            open(_off_file(data), "w").close()
-        elif os.path.exists(_off_file(data)):
-            os.remove(_off_file(data))
+        if enabled:
+            open(_on_file(data), "w").close()
+        elif os.path.exists(_on_file(data)):
+            os.remove(_on_file(data))
     except OSError:
         pass
 
 
-def is_disabled(data):
-    return os.path.exists(_off_file(data))
+def is_enabled(data):
+    return os.path.exists(_on_file(data))
+
+
+def _effort_file(data):
+    folder = os.path.join(state_dir(), "sessions")
+    os.makedirs(folder, exist_ok=True)
+    return os.path.join(folder, safe_name(data.get("session_id") or "unknown") + ".effort")
+
+
+def effort_asked(data):
+    """The low effort level the user was last asked about in this session, or None."""
+    try:
+        with open(_effort_file(data), encoding="utf-8") as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def mark_effort_asked(data, effort):
+    """Record the effort level the user was asked about, or clear the record with None."""
+    try:
+        if effort:
+            with open(_effort_file(data), "w", encoding="utf-8") as f:
+                f.write(effort)
+        elif os.path.exists(_effort_file(data)):
+            os.remove(_effort_file(data))
+    except OSError:
+        pass
 
 
 def _loaded_file(data, skill):
@@ -329,9 +418,9 @@ def active_work(data):
 
 
 def main_is_conductor(data):
-    """True for the main conversation of a session that runs on a Fable model,
-    unless the user turned conductor mode off for the session."""
-    return not is_subagent(data) and not is_disabled(data) and bool(main_model_is_fable(data))
+    """True for the main conversation of a session in which the user turned conductor mode on,
+    while it runs on a Fable or an Opus model."""
+    return not is_subagent(data) and is_enabled(data) and bool(main_model_can_conduct(data))
 
 
 # ---------------------------------------------------------------- paths
