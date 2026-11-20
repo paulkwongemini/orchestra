@@ -62,6 +62,19 @@ The rules were written after real sessions in which a conversation began with a 
 
 The hook is looser than the instructions in one place. With no confirmed brief, `scripts/guard_main.py` opens a confirmation prompt for a `push`, `github`, `http`, `ssh` or `deploy` command and does not refuse it. A conductor that does not follow the instructions can still put that prompt in front of the user.
 
+## Where the interview's intent checks come from
+
+Steps 2, 3, 4 and 8 of `orchestra:interview` check the intent before the design questions. These checks are: the one-sentence intent and its four parts, a form named in place of a result, the reading shown in the first question, directions offered as options, an answer that names a quality, a goal without a measure, a decision handed back, and the prediction test for stopping. They were adapted from the `interview-me` and `idea-refine` skills in [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills). They were rewritten in this plugin's terms, and the plugin does not load or depend on those skills, because both skills end in ways the conductor cannot follow:
+
+- `interview-me` has the user confirm a restated intent and then offers to hand off to `spec-driven-development`. Here the brief and its fixed last question are the only confirmation.
+- `idea-refine` asks several questions in one turn, and saves a one-pager under `docs/ideas/`, which the conductor may not write.
+
+`spec-driven-development` was not taken. Its spec, plan and task list duplicate the brief, the design and the task specs. It asks for the user's approval at each of four phases, where the conductor asks once so that the work can run while the user is away. It also has the agent implement.
+
+Two parts of `interview-me` were left out. One is the confidence number: naming the missing parts tells the user more. The other is guessing against one's own belief to test a polite user: it would contradict the recommended option.
+
+Like the rest of the interview, no hook checks these steps.
+
 ## How the brief's confirmation is checked
 
 A hook records the time whenever the user speaks in the main conversation: on every prompt (`UserPromptSubmit`), and when the user answers a question (`PostToolUse` of `AskUserQuestion`). When the conductor delegates implementation, the brief must not be newer than that time. A brief that was written or changed after the user last spoke cannot have been confirmed, so the delegation is refused.

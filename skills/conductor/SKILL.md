@@ -346,7 +346,7 @@ The harness checks the headings below. If you rename or drop one, the delegation
 The outcome the user wants, and why.
 
 ## Out of scope
-What this work will not do.
+What this work will not do. Name what a reader of the goal could take to be included, each with its reason in a few words, and the directions offered in the interview and not chosen.
 
 ## Proposed extras
 Changes the user did not ask for that you propose to make, one per line with the reason. `None` when there are none.

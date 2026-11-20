@@ -18,7 +18,19 @@ The interview ends in a brief that lets you make later decisions the way the use
 - Work out which kinds of action the work will need that the harness stops unless the brief pre-approves them: changing data or a schema, changing dependencies, changing git state, pushing, changing things on GitHub, writing to another machine over HTTP, using ssh, deploying. Count the fact-finding you left for after the brief, and the commands your own review will run, such as a migration or a seed to check a result, or installing dependencies to run the tests. Read what the project's instruction files, such as `AGENTS.md` and `CLAUDE.md`, say about each of these actions, and about worktrees.
 - Scale the effort to the request. For a small request, this can take a minute and leave nothing to ask.
 
-## 2. Lay out the decisions as a tree
+## 2. Write the intent, then lay out the decisions as a tree
+
+- First write for yourself, in one sentence, what the user wants and what it is for. Then check that the sentence says four things:
+  - who the result is for,
+  - why it is wanted, and why now when that matters,
+  - what will show that it worked,
+  - the one constraint that limits the work most.
+- Check also whether two reasonable aims pull against each other, such as simplicity and flexibility, or cost and speed, and whether the user has said which one wins.
+- Fill these from the request and from the facts you found. Each one you cannot fill is an open decision at the root of the tree, because its answer changes which other decisions exist.
+- A request that names a familiar form, such as "a dashboard" or "a settings page", often names the form that came to mind, not the result the user needs. Treat the form as one possible answer and the result behind it as the open decision. A form stated together with its purpose is not open.
+- For a small, clear request the sentence takes a moment and opens nothing.
+
+Reason: a design question asked before the intent is settled is asked inside a frame that may be wrong, and its answer is wrong with it.
 
 - List the decisions that are still open. Some decisions hang off others: the answer to one changes which others exist, or what their options are.
 - Order them so that a decision comes before the decisions that depend on it. Among those that can be asked now, start with the one whose answer changes the most of the rest.
@@ -28,15 +40,27 @@ The interview ends in a brief that lets you make later decisions the way the use
 
 - Ask one question in a turn, then stop and wait for the answer. With the question tool (AskUserQuestion), that is one call with one question in it. Do not put two questions in one call, and do not ask a second question in the text around it.
 - Give with each question the options, the option you recommend and why in one line, and what changes depending on the answer.
+- The option you recommend is your best guess at what the user will answer, from what you found. Say what the guess rests on, so that a wrong guess is easy to correct.
 - Ask in the user's language, in plain words. Do not ask the user to choose between names from the code that they have not seen.
 
-Reason: a question asked together with another is asked before its answer could shape it.
+Reason: a question asked together with another is asked before its answer could shape it. A user corrects a guess faster than they write an answer from nothing.
+
+- When the intent is the open decision, the first question shows your one-sentence reading of it and names which of the four things it is still missing.
+- When the goal is settled but the shape of the result is open, and the user would feel the difference, offer two or three directions as the options of one question.
+  - Make them different in kind, not variations on one idea, and include the simplest direction that still meets the goal.
+  - For each, say what it costs, which part of it is hardest, and what must be true for it to work.
+  - If a direction the user seems to favor is weak, say so and why.
+- The directions not chosen go under `## Out of scope` in the brief.
 
 ## 4. Take in the answer, then decide the next question
 
 - After each answer, say in one line what is now settled.
 - Rework the tree: drop the questions the answer made pointless, add the ones it opened, and look up any new facts it calls for.
 - An answer that does not fit the options, or that questions the question, is information. Follow it instead of repeating the question.
+- An answer that names a quality instead of a result settles nothing: "scalable", "clean", "robust", "the standard way", "the way most apps do it", "I should probably…". Ask what concrete result the quality is for, or what the user would want if they did not have to justify it to anyone.
+- A goal without a measure, such as "faster" or "easier to use", cannot be checked. In the next question, recommend a concrete measure, such as a time limit or a behavior someone can observe. It becomes an acceptance criterion.
+- "Whatever you think is best" hands the decision to you. If it is one you may make by the test of step 8, make it and write it into the brief as an assumption. If only the user can make it, such as the goal, the scope, or the acceptance criteria, ask again with two concrete options.
+  Reason: a decision that only the user can make is still unmade when it is handed back.
 
 ## 5. Settle what the brief pre-approves
 
@@ -79,6 +103,8 @@ Reason: the user decides whether a second checkout is worth what it costs.
 ## 8. When to stop asking
 
 - Stop when every decision still open is one you may make: an implementation detail inside the scope, easy to undo. The test is the one in the conductor's instructions under "When to ask the user".
+- Check that with a second test: you can predict how the user would answer each question you would still ask. If you cannot, the intent is not settled yet, even when every open decision looks like yours.
+- If several answers in a row have not made the intent clearer, stop asking in the same direction. Say what is still unclear, and ask whether to step back to the goal.
 - Write each of those decisions into the brief as an assumption, under the heading it belongs to, so the user can see it and change it.
 - There is no fixed number of questions. Some requests need none, some need many. If the user says to stop asking and get on with it, stop, and write the remaining open decisions into the brief as assumptions.
 
