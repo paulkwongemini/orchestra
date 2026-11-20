@@ -1,7 +1,7 @@
 {
   "name": "orchestra",
   "displayName": "Orchestra",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A harness that keeps the main model in the conductor role once you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents do the work that needs no judgment. In the Codex mode, runs of the Codex CLI implement instead.",
   "author": {
     "name": "paulkwongemini",

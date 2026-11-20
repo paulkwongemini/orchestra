@@ -53,6 +53,8 @@ Change the model in the middle of a chat, and the mode changes with it.
 
 The conductor decides for each message whether to answer it directly or to treat it as work. It answers directly only a question it can settle from the conversation, your project's files, and the web. Anything that asks for a result, or that needs an action you would have to allow, such as reading a server's logs over ssh, is work. Work starts with the interview: the conductor asks what you want, and which kinds of action it may take, before it runs anything that needs your approval.
 
+You can follow the workers on a board. When the conductor delegates its first task, it opens `python3 <plugin>/scripts/worker.py board` in a tab of the Terminal panel beside the chat, or gives you the command. Each worker in progress gets a pane of its own with its messages, commands and edits: at most two across and two down, and further windows, which you switch with 1-9 or the arrow keys, when there are more. A pane goes as soon as its worker finishes. In this mode the panes are the Claude subagents of the chats in your project; in the Codex mode they are the Codex runs and their subagents.
+
 Conductor mode is meant for work of some size. For a small task, leave it off. If it is already on, turn it off with `/orchestra:disable`, or switch the chat to Sonnet for the task.
 
 For a Fable conductor, we recommend starting at `high`, following [Anthropic's Claude Fable 5.2 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-fable-5-2#calibrate-effort). Choose the level to suit the work:
@@ -156,9 +158,9 @@ Requirements: the Codex CLI, installed and signed in. The plugin changes nothing
 
 - **The plugin's hooks step aside.** In this mode no hook guards the conductor, except the question about a low effort on Opus. The conductor keeps the same rules by its instructions alone, and says in its final report where it did not.
 - **Each run carries its own guard.** The conductor starts every run with `scripts/worker.py`, which passes the CLI a hook for that run only. The hook refuses what the plugin's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, an edit to the conductor's documents, any project edit by the `analyst`, and starting a Claude session. It reads the command line and is a tripwire, not a sandbox. The CLI's own sandbox keeps `.git` read-only.
-- **The run is checked afterwards.** The script compares the changed files with the paths in the task spec, and warns about a change outside them, a change to git state, and a `DONE` report without a valid verification record. It prints a few lines and never the report's text.
-- **The network is open unless you block it.** The interview asks once. `Worker network: blocked` under `## Constraints` in the brief turns it off, which suits a repository whose code must not leave the machine.
-- **You can follow a run.** The conductor gives you a command to run in a terminal of your own: `python3 <plugin>/scripts/worker.py watch --task <task spec>`. It shows the worker's messages, commands and edits, and the guard's refusals, as they happen.
+- **The run is checked afterwards.** The script compares the changed files with the paths in the task spec, and warns about a change outside them, a change to git state, and a `DONE` report without a valid verification record. When runs go side by side, it leaves out the others' records and puts each changed file down to the run that edited it or whose scope holds it. It prints a few lines and never the report's text.
+- **The network is open.** Every run may use it.
+- **You can follow the runs on the board**, as in the claude mode. Every run in progress, and each Codex subagent a run starts, gets a pane of its own, with the guard's refusals too. To follow one task alone, run `python3 <plugin>/scripts/worker.py watch --task <task spec>`; its `--calls` shows every call as the guard saw it, the moment it starts.
 - **At the plan's limit the task stops.** The conductor tells you, and does not move the task to a Claude subagent unless you say so.
 - **`scripts/audit.py <transcript>`** lists every point in a finished session where the conductor broke, or tried to break, a rule that the hooks guard. It is how the two kinds of mode are compared.
 
@@ -193,7 +195,8 @@ These rules are instructions. No hook enforces them.
 | Skill | `orchestra:cli-workers` | What changes for the conductor when its workers are CLI runs. Loaded in the Codex mode, in place of `orchestra:delegation` |
 | Skill | `orchestra:codex` | The facts of the Codex CLI, and the model each role runs on |
 | Role file | `roles/*.md` | The instructions a CLI worker reads: one file per role, and the rules they share in `roles/shared.md` |
-| Script | `scripts/worker.py` | Starts, resumes and checks a CLI run, and lets you follow one |
+| Script | `scripts/worker.py` | Starts, resumes and checks a CLI run, and lets you follow one (`watch`) or all of them (`board`) |
+| Script | `scripts/board.py` | The board that `worker.py board` opens |
 | Script | `scripts/audit.py` | Lists where a session's conductor broke, or tried to break, a rule the hooks guard |
 | Subagent | `orchestra:opus-engineer` | Opus, effort medium. Hard implementation, complex debugging |
 | Subagent | `orchestra:opus-analyst` | Opus, effort high. Architecture review, deep analysis. Read-only |

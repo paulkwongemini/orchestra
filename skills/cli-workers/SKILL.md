@@ -63,10 +63,6 @@ The format and the headings are the same. OpenAI's guides for these models ask f
 - **Blocking.** Nobody answers the worker while it runs. Make `## If blocked` say exactly when it stops and reports `BLOCKED`.
 - **Pre-approval.** The run's guard reads the brief's `Pre-approved:` line, and the worker reads only the spec. Write under `## Context` which kinds of command the brief pre-approves for the task. A worker never changes git state: `.git` is read-only to it.
 
-## The network, settled in the interview
-
-Workers may use the network unless the brief blocks it. Blocking suits a sensitive repository, whose code must not leave the machine. In the interview, ask once whether the workers may use the network, with open as the default and the reason for blocking. Write the answer under `## Constraints` in the brief, as `Worker network: open` or `Worker network: blocked`. With no such line, the network is open.
-
 ## A run
 
 Start every run with the plugin's script. Do not call the CLI yourself: its settings are easy to get wrong, and the CLI's skill says why. The script is `scripts/worker.py` in the plugin's folder. This skill's base directory, which Claude Code showed when it loaded, is `<plugin>/skills/cli-workers`.
@@ -77,22 +73,17 @@ python3 <plugin>/scripts/worker.py run --cli codex --task .orchestra/<work>/task
 
 `--cli` names the CLI of the mode the user turned on: `codex` in Codex mode. The effort levels the CLI takes are in its skill.
 
-- **What each run carries.** The script reads the brief at every run: its `Worker network:` line, and its `Pre-approved:` keys. It passes the run a guard, a PreToolUse hook of the CLI's own, which refuses what the claude mode's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, a data command that names production, an edit inside `.orchestra/` other than the task's report and `files/` folder, any project edit by a read-only role, and starting a Claude session. It reads the command line, so it is a tripwire, not a sandbox. Change the brief before a run, not during it.
+- **What each run carries.** The script reads the brief's `Pre-approved:` keys at every run. It passes the run a guard, a PreToolUse hook of the CLI's own, which refuses what the claude mode's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, a data command that names production, an edit inside `.orchestra/` other than the task's report and `files/` folder, any project edit by a read-only role, and starting a Claude session. It reads the command line, so it is a tripwire, not a sandbox. Change the brief before a run, not during it.
 - A run can take longer than a command in the foreground may. Start it in the background, end your turn, and go on when it reports, as you would wait for a subagent. Do not poll.
-- **The user can follow a run.** When you start one, give the user, in its own `bash` block, the command that follows it in a terminal of their own: the worker's messages, its commands and edits, and the guard's refusals as they happen.
-
-  ```bash
-  python3 <plugin>/scripts/worker.py watch --task .orchestra/<work>/tasks/T01-name.md
-  ```
-
-  It is for the user. You do not run it and you do not read what it shows, which is the run's record: your review still comes first.
+- **The user follows the runs on the board** that "4. Wait for the results" in the conductor's instructions opens, when you start the first run. It shows each run, and each Codex subagent a run starts, in a pane of its own. To follow one task alone, the user can run `python3 <plugin>/scripts/worker.py watch --task <task spec>`.
 - Runs that may go side by side under "Working in one directory" are started in the same message.
 
 ## After a run
 
-The script prints a few lines: the task, the CLI, the model and the effort, the time, the tokens, the session, the status from the worker's last message, a `GUARD:` line for each call the guard refused, the changed files, where the run's record is, and a `WARN:` line for each problem it found. It exits with 0, with 2 when it printed warnings, and with 1 when the run did not finish or could not start. It never prints the report's text.
+The script prints a few lines: the task, the CLI, the model and the effort, the time, the tokens, the session, the status from the worker's last message, a `GUARD:` line for each call the guard refused, the changed files, an `ALONGSIDE:` line when other runs went at the same time, where the run's record is, and a `WARN:` line for each problem it found. It exits with 0, with 2 when it printed warnings, and with 1 when the run did not finish or could not start. It never prints the report's text.
 
 - **A `GUARD:` line** is a refusal that worked, not a failure. Look at what the worker did instead. A task that needs the refused command needs a key in the brief, which only the user can approve.
+- **An `ALONGSIDE:` line** names the runs of the project that went at the same time. Their records and reports are left out, and a changed file the script puts down to one of them is checked in that run's review, not this one's. It puts a file down to another run when that run's guard saw it edit the file, or when the file is in that run's scope and not in this one's. A file a command wrote in another run's scope is put down to that run, so if this task could have written it, look at it in this review too.
 - **A change outside the scope, or to git state,** fails the review. Send it back as rework with the warning as evidence.
 - **A change under `.orchestra/`** outside the task's report and its `files/<task>/` folder is a worker that touched your documents. Put each one back as it was before the run, from what you wrote. If it was the brief, also tell the user. Then review as usual.
 - **A report that says `DONE` without a valid verification record** goes back as rework, after your own review.

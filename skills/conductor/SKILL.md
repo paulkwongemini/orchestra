@@ -101,6 +101,13 @@ Reason: once you start implementing, nobody is left to own the design and the ve
 - A long wait is not a problem to solve. A slow subagent is still working. Do not stop it, start a second subagent on the same task, or do part of its task yourself because of the time it is taking.
 - Step in only when a subagent has actually failed or stopped, or when the user tells you to. Then delegate the same task spec again.
 - Waiting takes no action. If the subagents run in the background, end your turn. You are resumed when one of them reports. Do not poll for status.
+- The user follows the workers on a board: each worker in progress in a pane of its own, at most two across and two down, with further windows when there are more, and a pane gone as soon as its worker finishes. Open it once per session, when you delegate the first task, in the project's folder. `<plugin>` is the plugin's folder, two levels above this skill's base directory, which Claude Code showed when it loaded.
+
+  ```bash
+  python3 <plugin>/scripts/worker.py board
+  ```
+
+  If you have a tool that runs a command in a tab of the user's Terminal panel, run it there, in a tab titled `orchestra board`, and link the tab in your message, because the tab does not open the panel by itself. Otherwise give the user the command in its own `bash` block. The board is for the user: you do not read it, nor the tab it runs in. Your review still comes first.
 - That you may write the files on the brief's `Conductor writes:` line yourself is not a reason to take a delegated task back.
 
 ### 5. Review

@@ -114,6 +114,16 @@ class WorkerGuardTest(ProjectTest):
                          [("Bash", "npm install left-pad", True), ("Bash", "ls", False), ("apply_patch", "", False)])
         self.assertEqual(rows[2]["paths"], [os.path.join(self.proj, "src", "a.py")])
 
+    def test_the_log_names_the_thread_of_each_call(self):
+        # A subagent's call carries the run's session id; its transcript is the subagent's own file.
+        sub = "/home/u/.codex/sessions/2026/11/20/rollout-2026-11-20T08-31-31-01a1f9cc-8054-74e2-87c9-b1b8a9bab2ef.jsonl"
+        self.hook({"tool_name": "Bash", "tool_input": {"command": "npm install x"}, "cwd": self.proj,
+                   "session_id": "01a1f9cc-1459-72e0-aa38-0fbce04afc51", "transcript_path": sub})
+        self.codex("ls")
+        rows = self.rows(self.activity)
+        self.assertEqual([r["thread"] for r in rows], ["01a1f9cc-8054-74e2-87c9-b1b8a9bab2ef", None])
+        self.assertEqual(self.rows(self.log)[0]["thread"], "01a1f9cc-8054-74e2-87c9-b1b8a9bab2ef")
+
     def test_a_fault_lets_the_call_through(self):
         payload = {"tool_name": "Bash", "tool_input": {"command": "npm install x"}}
         self.assertIsNone(self.hook(payload, context=os.path.join(self.tmp, "missing.json")))

@@ -20,9 +20,9 @@ Both models take the efforts `low`, `medium`, `high`, `xhigh`, `max` and `ultra`
 ## What a run has
 
 - **No interaction.** The run never asks for approval. An action its sandbox denies fails, and the worker sees the error. A worker that needs a decision reports `BLOCKED`.
-- **No user plugins or MCP servers.** The script turns off the user's Codex plugins and every MCP server in their Codex config. The user's own skills, Codex's built-in skills and the global `~/.codex/AGENTS.md` stay. The worker may start subagents of its own; that is its business.
+- **No user plugins or MCP servers.** The script turns off the user's Codex plugins, every MCP server in their Codex config, the ChatGPT app connectors, Codex's goals and its image generation. The user's own skills, Codex's built-in skills and the global `~/.codex/AGENTS.md` stay. Web search follows the user's Codex config. The worker may start subagents of its own; the run's guard sees their calls too.
 - **Writing.** `engineer`, `implementer` and `writer` may write anywhere in the project, `.orchestra/` included, which is why the script checks the changes afterwards. An `analyst` may write only its `files/<task>/` folder and the work folder's `reports/`; `/tmp` is taken from it too, so a project under `/tmp` stays read-only to it. The implementation roles keep `/tmp` for their tests. `.git` is read-only for every role, so no worker can commit, switch or stash.
-- **Network.** Open, unless the brief's `## Constraints` says `Worker network: blocked`.
+- **Network.** Open for every run.
 - **The guard.** The script passes the run a `PreToolUse` hook through `-c`, with `--dangerously-bypass-hook-trust`, so it needs no review and changes no config. It sees shell commands as `Bash` and file edits as `apply_patch`. The flag also lets the user's other enabled Codex hooks run without their review.
 - **Instructions it reads by itself:** the project's `AGENTS.md`. Not `CLAUDE.md`.
 - **The user's Codex config** sets the default model, effort and service tier. The script sets the model and the effort of every run. It leaves the service tier as the user set it.
@@ -38,5 +38,5 @@ Both models take the efforts `low`, `medium`, `high`, `xhigh`, `max` and `ultra`
 After the user updates the Codex CLI, check that the run still sees no user plugins. This shows what the model receives, without a model call:
 
 ```bash
-codex debug prompt-input -c 'model="gpt-6.2-astra"' --disable plugins hi
+codex debug prompt-input -c 'model="gpt-6.2-astra"' --disable plugins --disable apps --disable goals --disable image_generation hi
 ```

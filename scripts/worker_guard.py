@@ -17,11 +17,13 @@ claude mode's hooks apply to a Claude subagent:
 
 It reads the Codex input format:
 
-  {"tool_name": "Bash" | "apply_patch" | ..., "tool_input": {"command": ...}, "cwd": ...}
+  {"tool_name": "Bash" | "apply_patch" | ..., "tool_input": {"command": ...}, "cwd": ...,
+   "transcript_path": ...}
 
-Each refusal is logged for `worker.py` to report, and every call, let through or not, goes to the
-context's `activity` log for `worker.py watch`. A fault in the hook lets the call through, as for a
-Claude subagent, and is logged.
+The calls of the Codex subagents a worker starts come here too. Each refusal is logged for
+`worker.py` to report, and every call, let through or not, goes to the context's `activity` log
+for `worker.py watch`, with the thread that made it. A fault in the hook lets the call through,
+as for a Claude subagent, and is logged.
 
 The shell check reads the command line. It is a tripwire, not a sandbox: a request made from
 inside a script it starts is not seen.
@@ -38,6 +40,15 @@ import guard_main as gm  # noqa: E402
 
 PATCH_PATH = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$|^\*\*\* Move to: (.+?)\s*$", re.M)
 CODEX_SHELL = ("Bash", "shell", "exec_command", "local_shell")
+# A subagent's call carries the run's session id, but its transcript is the subagent's own
+# session file, whose name ends in the subagent's thread id.
+THREAD_FILE = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$")
+
+
+def thread_of(data):
+    """The thread that made the call, from its transcript's file name, or None."""
+    m = THREAD_FILE.search(str(data.get("transcript_path") or ""))
+    return m.group(1) if m else None
 
 
 def read_call(data):
@@ -105,12 +116,11 @@ def main():
         call = read_call(data)
         name, command, paths = call
         reason = judge(ctx, data, call)
-        now = time.time()
+        row = {"at": time.time(), "tool": name, "command": (command or "")[:300], "paths": paths, "thread": thread_of(data)}
         # Every call, let through or not, for the user who follows the run with `worker.py watch`.
-        log(ctx, {"at": now, "tool": name, "command": (command or "")[:300], "paths": paths,
-                  "refused": bool(reason)}, "activity")
+        log(ctx, dict(row, refused=bool(reason)), "activity")
         if reason:
-            log(ctx, {"at": now, "tool": name, "command": (command or "")[:300], "paths": paths, "reason": reason[:300]})
+            log(ctx, dict(row, reason=reason[:300]))
         answer(reason)
     except Exception as exc:  # a fault lets the call through, as for a Claude subagent
         log(ctx, {"at": time.time(), "fault": "%s: %s" % (type(exc).__name__, exc)})

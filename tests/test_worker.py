@@ -117,7 +117,7 @@ class WorkerTest(ProjectTest):
         self.assertIn("sandbox_workspace_write.network_access=true", configs)
         self.assertIn("sandbox_workspace_write.exclude_slash_tmp=false", configs)  # an implementation role keeps /tmp
         self.assertIn("sandbox_workspace_write.exclude_tmpdir_env_var=false", configs)
-        self.assertEqual(self.option(argv, "--disable"), ["plugins"])
+        self.assertEqual(self.option(argv, "--disable"), ["plugins", "apps", "goals", "image_generation"])
         hooks = [v for v in configs if v.startswith("hooks.PreToolUse=")]
         self.assertEqual(len(hooks), 1)
         self.assertIn('matcher=".*"', hooks[0])
@@ -147,15 +147,14 @@ class WorkerTest(ProjectTest):
         self.run_task("--effort", "max", role="engineer")
         self.assertIn('model_reasoning_effort="max"', self.option(self.calls()[-1]["argv"], "-c"))
 
-    def test_the_brief_decides_the_network_and_the_keys(self):
+    def test_the_brief_gives_the_keys_and_the_network_is_always_open(self):
+        # A line from briefs written before the setting was dropped changes nothing.
         self.write(UNIT + "/brief.md", "## Constraints\nWorker network: blocked\n\n## Decision rights\nPre-approved: deps, http\n")
         self.run_task()
         configs = self.option(self.calls()[-1]["argv"], "-c")
-        self.assertIn("sandbox_workspace_write.network_access=false", configs)
+        self.assertIn("sandbox_workspace_write.network_access=true", configs)
+        self.assertNotIn("sandbox_workspace_write.network_access=false", configs)
         self.assertEqual(self.read_record("guard.json")["keys"], ["deps", "http"])
-        self.write(UNIT + "/brief.md", "## Constraints\nWorker network: open\n")
-        self.run_task()
-        self.assertIn("sandbox_workspace_write.network_access=true", self.option(self.calls()[-1]["argv"], "-c"))
 
     def test_an_analyst_writes_only_its_report_folder_and_its_files(self):
         self.plan({"write": {REPORT_PATH: REPORT_DONE}, "last": STATUS_DONE})
@@ -202,6 +201,51 @@ class WorkerTest(ProjectTest):
         self.assertEqual(code, 2, out)
         self.assertIn("WARN: Changed outside the paths under `## Scope and limits`: src/other.py", out)
         self.assertNotIn("test_a.py", out.split("WARN")[1])
+
+    def other_run(self, task, scope, started, edits=(), ended=None):
+        """Another run's record in the same project: live.json, its guard's log of edits, and run.json once over."""
+        spec = self.write("%s/tasks/%s-x.md" % (UNIT, task), TASK.replace("`src/login.py` and the tests in `tests/login/`", scope)
+                          .replace(REPORT_PATH, "%s/reports/%s.md" % (UNIT, task)))
+        record = "%s/files/%s/cli" % (UNIT, task)
+        self.write(record + "/live.json", json.dumps({"round": 1, "started": started, "spec": spec,
+                                                      "report": os.path.join(self.proj, UNIT, "reports", task + ".md")}))
+        self.write(record + "/activity.jsonl", "".join(json.dumps(
+            {"at": started + 1, "tool": "apply_patch", "command": "", "paths": [os.path.join(os.path.realpath(self.proj), p)],
+             "refused": False}) + "\n" for p in edits))
+        if ended is not None:
+            path = self.write(record + "/run.json", json.dumps({"rounds": 1}))
+            os.utime(path, (ended, ended))
+
+    def test_the_changes_of_runs_alongside_are_put_down_to_them(self):
+        now = time.time()
+        self.other_run("T02", "`src/other.py`", now - 30, edits=["src/shared.py"])
+        self.other_run("T03", "`src/old.py`", now - 300, ended=now - 200)  # over before this run began
+        self.plan({"write": {"src/login.py": "new\n", REPORT_PATH: REPORT_DONE,
+                             # T02's own record and report, written while this run went
+                             UNIT + "/files/T02/cli/events-1.jsonl": "{}\n", UNIT + "/reports/T02.md": "STATUS: DONE\n",
+                             "src/other.py": "theirs\n", "src/shared.py": "theirs\n", "src/old.py": "?\n",
+                             "elsewhere/x.py": "nobody's\n"},
+                   "last": STATUS_DONE})
+        code, out = self.run_task()
+        self.assertEqual(code, 2, out)
+        self.assertIn("ALONGSIDE: T02 ran at the same time. Changes put down to them: T02 src/other.py, src/shared.py", out)
+        self.assertNotIn("T03", out.split("ALONGSIDE")[1].split("\n")[0])
+        self.assertNotIn("Changed under `.orchestra/`", out)
+        changed = [l for l in out.split("\n") if l.startswith("CHANGED:")][0]
+        self.assertEqual(changed, "CHANGED: elsewhere/x.py, src/login.py, src/old.py")
+        self.assertIn("WARN: Changed outside the paths under `## Scope and limits`: elsewhere/x.py, src/old.py", out)
+
+    def test_an_edit_of_its_own_stays_its_own_alongside_another_run(self):
+        now = time.time()
+        self.other_run("T02", "`src/other.py`", now - 30)
+        seen = json.dumps({"at": now + 60, "tool": "apply_patch", "command": "", "refused": False,
+                           "paths": [os.path.join(os.path.realpath(self.proj), "src/other.py")]}) + "\n"
+        self.plan({"write": {"src/login.py": "new\n", "src/other.py": "mine\n", REPORT_PATH: REPORT_DONE,
+                             UNIT + "/files/T01/cli/activity.jsonl": seen},  # T01's guard saw the edit
+                   "last": STATUS_DONE})
+        code, out = self.run_task()
+        self.assertEqual(code, 2, out)
+        self.assertIn("WARN: Changed outside the paths under `## Scope and limits`: src/other.py", out)
 
     def test_a_change_to_the_conductors_documents_is_flagged(self):
         self.plan({"write": {"src/login.py": "new\n", UNIT + "/brief.md": "## Goal\nchanged\n",
@@ -261,7 +305,7 @@ class WorkerTest(ProjectTest):
         for value in self.option(first["argv"], "-c"):
             self.assertIn(value, self.option(argv, "-c"))
         self.assertEqual(self.option(argv, "-m"), ["gpt-6.2-astra"])
-        self.assertEqual(self.option(argv, "--disable"), ["plugins"])
+        self.assertEqual(self.option(argv, "--disable"), ["plugins", "apps", "goals", "image_generation"])
         self.assertTrue(self.option(argv, "-o")[0].endswith("last-message-2.md"))
         self.assertEqual(second["cwd"], first["cwd"])
         self.assertEqual(second["stdin"], "")
@@ -326,6 +370,60 @@ class WorkerTest(ProjectTest):
         code, out = self.worker("watch", "--task", self.spec)  # the run is over, so following stops at once
         self.assertEqual(code, 0, out)
         self.assertIn("The run is over", out)
+
+    def session_file(self, thread, meta, lines=()):
+        """A Codex session file under the fake CODEX_HOME: its first line, then `lines`."""
+        folder = os.path.join(self.codex_home, "sessions", time.strftime("%Y/%m/%d"))
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "rollout-2026-11-20T08-31-31-%s.jsonl" % thread)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"timestamp": "2026-11-20T16:31:31.000Z", "type": "session_meta",
+                                "payload": dict(meta, id=thread, timestamp="2026-11-20T16:31:31.000Z")}) + "\n")
+            for n, line in enumerate(lines, 1):
+                f.write(json.dumps(dict(line, ordinal=n)) + "\n")
+
+    @staticmethod
+    def completed(item):
+        return {"timestamp": "2026-11-20T16:31:33.000Z", "type": "event_msg", "payload": {"type": "item_completed", "item": item}}
+
+    def test_watch_shows_the_subagents(self):
+        self.run_task()
+        inherited = self.completed({"type": "AgentMessage", "content": [{"type": "Text", "text": "the parent's history"}]})
+        own = [
+            {"type": "event_msg", "payload": {"type": "thread_settings_applied"}},
+            self.completed({"type": "AgentMessage", "content": [{"type": "Text", "text": "Running the checks."}]}),
+            self.completed({"type": "CommandExecution", "command": ["/usr/bin/bash", "-lc", "pytest -q"], "exit_code": 2}),
+            self.completed({"type": "FileChange", "changes": {os.path.join(self.proj, "src", "a.py"): {"type": "update"}}}),
+            {"timestamp": "2026-11-20T16:31:40.000Z", "type": "event_msg", "payload": {"type": "task_complete"}},
+        ]
+        self.session_file("sub-1", {"parent_thread_id": "sess-1", "agent_nickname": "Noether",
+                                    "subagent_history_start_ordinal": 2}, [inherited] + own)
+        self.session_file("sub-2", {"parent_thread_id": "sub-1", "agent_nickname": "Dalton", "subagent_history_start_ordinal": 1},
+                          [self.completed({"type": "AgentMessage", "content": [{"type": "Text", "text": "nested"}]})])
+        self.session_file("other", {"parent_thread_id": "another-run", "agent_nickname": "Euler"},
+                          [self.completed({"type": "AgentMessage", "content": [{"type": "Text", "text": "not this run"}]})])
+        with open(self.record("activity.jsonl"), "a", encoding="utf-8") as f:
+            for thread, command in (("sess-1", "ls"), ("sub-1", "pytest -q"), ("unseen", "make")):
+                f.write(json.dumps({"at": time.time(), "tool": "Bash", "command": command, "paths": [],
+                                    "refused": False, "thread": thread}) + "\n")
+        code, out = self.worker("watch", "--task", self.spec, "--no-follow")
+        self.assertEqual(code, 0, out)
+        self.assertIn("agent  Noether started", out)
+        self.assertIn("[Noether] say    Running the checks.", out)
+        self.assertIn("[Noether] $      pytest -q", out)
+        self.assertIn("[Noether]        exit 2", out)
+        self.assertIn("[Noether] edit   update src/a.py", out)
+        self.assertIn("agent  Noether finished", out)
+        self.assertIn("[Dalton] say    nested", out)
+        self.assertNotIn("the parent's history", out)
+        self.assertNotIn("not this run", out)
+        code, out = self.worker("watch", "--task", self.spec, "--no-follow", "--calls")
+        self.assertEqual(code, 0, out)
+        self.assertIn("call   Bash ls", out)
+        self.assertIn("call   [Noether] Bash pytest -q", out)
+        self.assertIn("call   [subagent] Bash make", out)
+        self.assertNotIn("[Noether] $", out)  # with --calls the guard's log shows the commands
+        self.assertIn("[Noether] say    Running the checks.", out)
 
     def test_watch_before_any_run(self):
         code, out = self.worker("watch", "--task", self.spec, "--no-follow")
