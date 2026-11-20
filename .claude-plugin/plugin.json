@@ -1,8 +1,8 @@
 {
   "name": "orchestra",
   "displayName": "Orchestra",
-  "version": "0.2.2",
-  "description": "A harness that keeps the main model in the conductor role once you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents do the work that needs no judgment. In the Codex and agy modes, runs of the Codex CLI or the Antigravity CLI implement instead.",
+  "version": "0.2.3",
+  "description": "A harness that keeps the main model in the conductor role once you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents do the work that needs no judgment. In the Codex mode, runs of the Codex CLI implement instead.",
   "author": {
     "name": "paulkwongemini",
     "url": "https://github.com/paulkwongemini"
@@ -10,5 +10,5 @@
   "homepage": "https://github.com/paulkwongemini/orchestra",
   "repository": "https://github.com/paulkwongemini/orchestra",
   "license": "MIT",
-  "keywords": ["orchestration", "subagents", "harness", "codex", "gemini"]
+  "keywords": ["orchestration", "subagents", "harness", "codex"]
 }

@@ -1,6 +1,6 @@
 ---
 name: disable
-description: Turns conductor mode off for this chat, so that the session works as an ordinary one. Stays off until /orchestra:conduct, /orchestra:conductor, /orchestra:conduct-codex or /orchestra:conduct-agy.
+description: Turns conductor mode off for this chat, so that the session works as an ordinary one. Stays off until /orchestra:conduct, /orchestra:conductor or /orchestra:conduct-codex.
 disable-model-invocation: true
 ---
 

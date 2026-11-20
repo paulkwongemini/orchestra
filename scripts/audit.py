@@ -2,7 +2,7 @@
 """List every point in a session where the conductor broke, or tried to break, a rule that the
 hooks guard in the claude mode.
 
-    audit.py <transcript.jsonl> [--project <dir>] [--assume claude|codex|agy] [--json]
+    audit.py <transcript.jsonl> [--project <dir>] [--assume claude|codex] [--json]
 
 `--assume` sets the mode from the start, for a session whose mode was turned on before the
 transcript begins.
@@ -44,7 +44,7 @@ REPORT_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reports/(T\d+)[^/\s`'\"]*\.
 REVIEW_FILE = re.compile(r"\.orchestra/([^/\s`'\"]+)/reviews/(T\d+)[^/\s`'\"]*\.md")
 WORKER_RUN = re.compile(r"worker\.py\s+(run|resume)\b")
 CLI_ARG = re.compile(r"--cli[=\s]+([A-Za-z0-9_-]+)")
-DIRECT_CLI = re.compile(r"(?:^|[\s;&|(])(?:codex\s+exec|agy\s+(?:-p|--print|--prompt)|gemini\s)")
+DIRECT_CLI = re.compile(r"(?:^|[\s;&|(])(?:codex\s+exec)")
 WRITE_TOOLS = ("Write", "Edit", "NotebookEdit")
 HOOK_REFUSAL = re.compile(r"hook error|\[orchestra\]|denied", re.I)
 

@@ -4,11 +4,11 @@ when the user last spoke, and tell the main conversation which mode applies.
 
 Conductor mode is off when a session starts. The user turns on one mode for the session:
 `claude` with `/orchestra:conduct` or `/orchestra:conductor`, `codex` with
-`/orchestra:conduct-codex`, and `agy` with `/orchestra:conduct-agy`. `/orchestra:disable`
-turns it off. In the `claude` mode, the harness applies when the main conversation runs on a
-Fable or an Opus model. On any other model the session is an ordinary one, and the guards leave
-it alone. In a CLI mode this hook only records the mode and the user's turns, and sends no note:
-the conductor works from its instructions alone.
+`/orchestra:conduct-codex`. `/orchestra:disable` turns it off. In the `claude` mode, the
+harness applies when the main conversation runs on a Fable or an Opus model. On any other
+model the session is an ordinary one, and the guards leave it alone. In a CLI mode this hook
+only records the mode and the user's turns, and sends no note: the conductor works from its
+instructions alone.
 
 A hook is not always told the model, so a note that is sent before the model is known covers
 both cases. Claude Code tells the model which model it is, so the model can pick the case that

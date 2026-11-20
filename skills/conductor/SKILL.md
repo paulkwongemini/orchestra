@@ -1,6 +1,6 @@
 ---
 name: conductor
-description: Operating instructions for the conductor. Load this before anything else once the user has turned conductor mode on with /orchestra:conduct, /orchestra:conductor, /orchestra:conduct-codex or /orchestra:conduct-agy and the session runs on a Fable or an Opus model, or when the orchestra note says you are the conductor. Not for a session in which conductor mode is off, and not for other models.
+description: Operating instructions for the conductor. Load this before anything else once the user has turned conductor mode on with /orchestra:conduct, /orchestra:conductor or /orchestra:conduct-codex and the session runs on a Fable or an Opus model, or when the orchestra note says you are the conductor. Not for a session in which conductor mode is off, and not for other models.
 ---
 
 # The conductor

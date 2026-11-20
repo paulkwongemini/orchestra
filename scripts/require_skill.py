@@ -18,7 +18,7 @@ call, and told to recommend High or above to the user and ask whether to go on. 
 decides: the next call goes through whatever they answer. The question comes again only when
 the effort changes to another low level, or the user turns conductor mode on again.
 
-In a CLI mode (`codex`, `agy`) the effort question is the only thing this hook does. The
+In the CLI mode (`codex`) the effort question is the only thing this hook does. The
 instructions are not required to be loaded first, because the CLI modes run on instructions
 alone. The conductor cannot know its own effort, so no instruction can replace the question.
 """

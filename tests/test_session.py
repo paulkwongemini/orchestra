@@ -165,7 +165,7 @@ class SwitchTest(HookTest):
 
 
 class CliModeTest(HookTest):
-    """In a CLI mode (`codex`, `agy`) the hooks step aside, except the Opus effort question."""
+    """In the CLI mode (`codex`) the hooks step aside, except the Opus effort question."""
 
     def guards(self):
         """The verdicts of each guard on calls it refuses in the `claude` mode."""
@@ -189,18 +189,16 @@ class CliModeTest(HookTest):
             self.assertEqual(verdict, "deny", name)
 
     def test_every_guard_steps_aside_in_a_cli_mode(self):
-        for command in ("/orchestra:conduct-codex", "/orchestra:conduct-agy"):
-            with self.subTest(command=command):
-                self.say(command)
-                for name, verdict in self.guards().items():
-                    self.assertEqual(verdict, "allow", name)
+        self.say("/orchestra:conduct-codex")
+        for name, verdict in self.guards().items():
+            self.assertEqual(verdict, "allow", name)
 
     def test_commands_switch_between_modes(self):
         self.say("/orchestra:conduct-codex fix the login bug")
         self.assertEqual(self.write_src(), "allow")
         self.say("/orchestra:conduct")
         self.assertEqual(self.write_src(), "deny")
-        self.say("/orchestra:conduct-agy")
+        self.say("/orchestra:conduct-codex")
         self.assertEqual(self.write_src(), "allow")
         self.say("/orchestra:conductor")
         self.assertEqual(self.write_src(), "deny")
@@ -233,8 +231,6 @@ class CliModeTest(HookTest):
         self.set_transcript([at_effort(OPUS, "low")])
         self.assertEqual(self.use(), "deny")
         self.assertEqual(self.use(), "allow")
-        self.say("/orchestra:conduct-agy")
-        self.assertEqual(self.use(), "deny")
         self.set_transcript([at_effort(OPUS, "high")])
         self.say("/orchestra:conduct-codex")
         self.assertEqual(self.use(), "allow")

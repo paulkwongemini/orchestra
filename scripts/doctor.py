@@ -94,7 +94,7 @@ def main():
     lines.append(
         "%s Mode: conductor mode is off when a session starts. `/orchestra:conduct` turns it on "
         "for the session, and it applies while the session runs on a Fable or an Opus model. "
-        "`/orchestra:conduct-codex` and `/orchestra:conduct-agy` turn on the CLI modes, in which the hooks step aside. "
+        "`/orchestra:conduct-codex` turns on the CLI mode, in which the hooks step aside. "
         "`/orchestra:disable` turns it off." % OK
     )
 

@@ -3,7 +3,7 @@
 
 Run: python3 tests/test_worker_guard.py
 
-Each test feeds the hook a call in the Codex or the agy format and checks its answer.
+Each test feeds the hook a call in the Codex format and checks its answer.
 """
 import json
 import os
@@ -38,19 +38,13 @@ class WorkerGuardTest(ProjectTest):
         with open(path, encoding="utf-8") as f:
             return [json.loads(line) for line in f]
 
-    # ---- the two formats
+    # ---- the call format
 
     def codex(self, command=None, patch=None, **kw):
         """The verdict on a Codex call: a shell command, or a patch."""
         tool, tool_input = ("apply_patch", {"command": patch}) if patch is not None else ("Bash", {"command": command})
         out = self.hook({"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input, "cwd": self.proj}, **kw)
         return "allow" if out is None else out["hookSpecificOutput"]["permissionDecision"]
-
-    def agy(self, name, args, prompt="", **kw):
-        """The verdict on an agy tool call."""
-        payload = {"hookEventName": "PreToolUse", "toolCall": {"name": name, "args": args}, "cwd": self.proj,
-                   "lastUserInput": prompt}
-        return self.hook(payload, **kw)["decision"]
 
     @staticmethod
     def patch(path):
@@ -101,23 +95,6 @@ class WorkerGuardTest(ProjectTest):
         self.assertEqual(self.codex("grep -rn login src", kind="readonly"), "allow")
         self.assertEqual(self.codex("npm install x", kind="readonly", keys=["deps"]), "deny")
 
-    # ---- agy
-
-    def test_agy_commands_and_edits(self):
-        self.assertEqual(self.agy("run_command", {"CommandLine": "npm install left-pad"}), "deny")
-        self.assertEqual(self.agy("run_command", {"CommandLine": "echo hi"}, prompt="please npm install left-pad"), "allow")
-        self.assertEqual(self.agy("write_file", {"Path": os.path.join(self.proj, UNIT, "brief.md"), "Content": "x"}), "deny")
-        self.assertEqual(self.agy("write_file", {"Path": os.path.join(self.proj, "src/app.py"), "Content": "x"}), "allow")
-        self.assertEqual(self.agy("replace_file_content", {"TargetFile": os.path.join(self.proj, UNIT, "decisions.md")}), "deny")
-
-    def test_agy_reading_is_not_writing(self):
-        brief = os.path.join(self.proj, UNIT, "brief.md")
-        self.assertEqual(self.agy("view_file", {"AbsolutePath": brief}, kind="readonly"), "allow")
-        self.assertEqual(self.agy("write_file", {"Path": os.path.join(self.proj, "src/app.py")}, kind="readonly"), "deny")
-
-    def test_agy_does_not_leave_its_sandbox(self):
-        self.assertEqual(self.agy("run_command", {"CommandLine": "curl https://example.com", "BypassSandbox": True}), "deny")
-
     # ---- the log and faults
 
     def test_refusals_are_logged(self):
@@ -131,14 +108,11 @@ class WorkerGuardTest(ProjectTest):
     def test_every_call_goes_to_the_activity_log(self):
         self.codex("npm install left-pad")
         self.codex("ls")
-        self.agy("write_file", {"TargetFile": os.path.join(self.proj, "src", "a.py")})
+        self.codex(patch=self.patch(os.path.join(self.proj, "src", "a.py")))
         rows = self.rows(self.activity)
         self.assertEqual([(r["tool"], r["command"], r["refused"]) for r in rows],
-                         [("Bash", "npm install left-pad", True), ("Bash", "ls", False), ("write_file", "", False)])
+                         [("Bash", "npm install left-pad", True), ("Bash", "ls", False), ("apply_patch", "", False)])
         self.assertEqual(rows[2]["paths"], [os.path.join(self.proj, "src", "a.py")])
-        self.agy("read_file", {"AbsolutePath": "/x/y.md"})
-        last = self.rows(self.activity)[-1]
-        self.assertEqual((last["paths"], last["target"]), ([], "/x/y.md"))
 
     def test_a_fault_lets_the_call_through(self):
         payload = {"tool_name": "Bash", "tool_input": {"command": "npm install x"}}

@@ -6,9 +6,9 @@ Notes for people who change the plugin. Users do not need this page.
 
 Two things decide it: whether the user has turned conductor mode on for the session, and which model the session runs on.
 
-Conductor mode is off when a session starts. The user turns on one of three modes for the session: `claude` with `/orchestra:conduct` or `/orchestra:conductor`, `codex` with `/orchestra:conduct-codex`, and `agy` with `/orchestra:conduct-agy`. `/orchestra:disable` turns it off. A hook on the user's prompt records the mode per session, so only a command the user types changes it. The table of commands is `COMMAND_MODES` in `scripts/common.py`.
+Conductor mode is off when a session starts. The user turns on one of two modes for the session: `claude` with `/orchestra:conduct` or `/orchestra:conductor`, and `codex` with `/orchestra:conduct-codex`. `/orchestra:disable` turns it off. A hook on the user's prompt records the mode per session, so only a command the user types changes it. The table of commands is `COMMAND_MODES` in `scripts/common.py`.
 
-The rest of this section, and every section up to "How the CLI modes work", describes the `claude` mode. In `codex` and `agy` every guarding hook reads the mode first and exits without a decision.
+The rest of this section, and every section up to "How the CLI mode works", describes the `claude` mode. In `codex` every guarding hook reads the mode first and exits without a decision.
 
 While the mode is on, a session on a Fable (or Mythos) or an Opus model is a conductor session. The roster of subagents is the same for both. A session on any other model is an ordinary one.
 
@@ -134,28 +134,26 @@ The four task agents share most of their rules, and an agent file cannot include
 
 The roles of the CLI workers are not built this way, because a CLI worker can read a second file: each file in `roles/` names `roles/shared.md`.
 
-## How the CLI modes work
+## How the CLI mode works
 
-The modes exist to spend the Codex or Antigravity CLI's plan on the implementation instead of the Claude plan, with the quality of the result unchanged. How a worker reaches its result does not matter. The result the conductor reviews does.
+The mode exists to spend the Codex CLI's plan on the implementation instead of the Claude plan, with the quality of the result unchanged. How a worker reaches its result does not matter. The result the conductor reviews does.
 
-The user set the installation boundary: the plugin installs with the two commands in the README and needs no second step. No background service, no change to the user's Codex or agy configuration, and no file written into the user's project to set a mode up. Whatever a run needs is in the plugin's own files or in the settings that `scripts/worker.py` passes for that one run. That is why the guard reaches Codex through `-c` on the command line, and reaches agy through a workspace folder of the plugin's own.
+The user set the installation boundary: the plugin installs with the two commands in the README and needs no second step. No background service, no change to the user's Codex configuration, and no file written into the user's project to set a mode up. Whatever a run needs is in the plugin's own files or in the settings that `scripts/worker.py` passes for that one run. That is why the guard reaches Codex through `-c` on the command line.
 
 The instructions have three layers, so that a further CLI adds one skill and one class in `scripts/worker.py`:
 
 1. `orchestra:conductor`, unchanged, with `orchestra:interview` and `orchestra:documentation`.
-2. `orchestra:cli-workers`, shared by the CLI modes: what changes when the workers are runs, and which rules nobody enforces now.
-3. `orchestra:codex` or `orchestra:agy`: the facts of that CLI.
+2. `orchestra:cli-workers`, for every CLI mode: what changes when the workers are runs, and which rules nobody enforces now.
+3. `orchestra:codex`: the facts of that CLI.
 
-The modes are also a test of whether the conductor keeps its rules without hooks. `scripts/audit.py` reads a finished session's transcript and its work folder, and lists each point where a hook would have refused or flagged a call. The same audit runs on a `claude`-mode session, where the findings are attempts that a hook stopped, so the two kinds of mode compare on one measure. Whether the `claude` mode drops its hooks is the user's decision, taken from the audit's results. No bar is set in advance. The question about a low effort on Opus stays in every mode, because the conductor cannot know its own effort and no instruction can replace the hook.
+The mode is also a test of whether the conductor keeps its rules without hooks. `scripts/audit.py` reads a finished session's transcript and its work folder, and lists each point where a hook would have refused or flagged a call. The same audit runs on a `claude`-mode session, where the findings are attempts that a hook stopped, so the two kinds of mode compare on one measure. Whether the `claude` mode drops its hooks is the user's decision, taken from the audit's results. No bar is set in advance. The question about a low effort on Opus stays in every mode, because the conductor cannot know its own effort and no instruction can replace the hook.
 
-The role files in `roles/` follow OpenAI's and Google's own prompting guides, [Prompting GPT-6.2 Astra](https://learn.chatgpt.com/guides/prompting-gpt-6-2-astra) and Google's [Engineer agentic prompts](https://docs.cloud.google.com/gemini/docs/discover/engineer-agentic-prompts). What the two ask of a coding worker is mostly the same, so the roles are shared by both CLIs. Where they differ, on how many tests to write, the task spec decides: it names the tests.
+The role files in `roles/` follow OpenAI's prompting guide, [Prompting GPT-6.2 Astra](https://learn.chatgpt.com/guides/prompting-gpt-6-2-astra).
 
-Facts about the CLIs that the code does not show:
+Facts about the Codex CLI that the code does not show:
 
 - **Codex plugins.** `--disable plugins` turns every Codex plugin off for a run. Turning one plugin off with `-c 'plugins."<name>".enabled=false'` changed nothing in the model's input. `--disable multi_agent` does not remove Codex's multi-agent instructions, which the user accepts.
 - **Seeing the model's input.** `codex debug prompt-input -c 'model="..."' <prompt>` prints what the model receives, without a model call. Use it after any change to the flags.
-- **agy's hook input** carries `lastUserInput`, the whole prompt. A guard that searched its whole input would find the words of the task spec and refuse every call, so `scripts/worker_guard.py` reads only the call.
-- **agy on a project under `/tmp`.** The first agy runs used one. The sandbox and its allow rules were then confirmed on a project under the home folder.
 
 A new CLI needs an answer to each of these before its class is written:
 
@@ -170,7 +168,7 @@ A new CLI needs an answer to each of these before its class is written:
 9. Which instruction files it reads by itself.
 10. What happens at its plan's limit.
 
-Not known for either CLI: how a run ends at the plan's limit, and whether a resumed Codex run reports its tokens per turn or in total.
+Not known for Codex: how a run ends at the plan's limit, and whether a resumed run reports its tokens per turn or in total.
 
 ## Running the tests
 
@@ -186,8 +184,8 @@ Each file under `tests/` also runs on its own, as `python3 tests/test_guard_main
 |---|---|
 | `test_session.py`, `test_require_skill.py`, `test_guard_agent.py`, `test_guard_main.py`, `test_reports.py` | The hook script of that name, and for `test_reports.py` both `report_gate.py` and `check_report.py`. Each test feeds the script JSON shaped like what Claude Code sends and checks the verdict |
 | `test_doctor.py` | `scripts/doctor.py` |
-| `test_worker.py` | `scripts/worker.py` against a fake `codex` and a fake `agy` on the PATH |
-| `test_worker_guard.py` | The worker guard, on calls in the Codex and the agy formats |
+| `test_worker.py` | `scripts/worker.py` against a fake `codex` on the PATH |
+| `test_worker_guard.py` | The worker guard, on calls in the Codex format |
 | `test_audit.py` | The audit, on transcripts that the test writes |
 | `test_agents.py` | That `agents/` matches `agents-src/` |
 
@@ -210,7 +208,7 @@ The tests cover every verdict of every hook script, among them:
 - **Reports.** A `DONE` handback refused for a missing or invalid verification record, a failed or unrun check, a nonzero exit code, missing evidence, and an unverified requirement. `BLOCKED` and `FAILED` returning without one. The retry limit. A report changed after handback checked again. A report that does not open before its review record, and a reworked report that needs a new one.
 - **The `files/` folder.** A subagent writing under `.orchestra/<work>/files/`, the same write refused elsewhere in the work folder, and the conductor reading `files/` without a review record.
 - **The Haiku subagents.** The conductor starting `haiku-scout` with no task spec, and `haiku-editor` only under a confirmed brief. A call refused for a missing line and for a prompt over 1,500 characters. The subagents that implement starting both Haiku subagents and nothing else, `opus-analyst` starting only the scout, and a Haiku subagent starting nothing. A model that does not belong to the subagent refused both ways. The editor writing project files, nothing inside `.orchestra/`, and no command of a pre-approval kind. A further 32 inputs made by hand gave the expected verdicts.
-- **The CLI modes.** `conduct-codex` and `conduct-agy` setting their mode, every guard stepping aside in it, and the effort question still asked. `scripts/worker.py` against a fake `codex` and a fake `agy` on the PATH: the settings of a first run and of a resume, the brief's network line and keys, and each warning of the check after a run. `scripts/worker_guard.py` on calls in the Codex and the agy formats. `scripts/audit.py` on transcripts that the test writes.
+- **The CLI mode.** `conduct-codex` setting its mode, every guard stepping aside in it, and the effort question still asked. `scripts/worker.py` against a fake `codex` on the PATH: the settings of a first run and of a resume, the brief's network line and keys, and each warning of the check after a run. `scripts/worker_guard.py` on calls in the Codex format. `scripts/audit.py` on transcripts that the test writes.
 
 ### In real sessions
 
@@ -227,13 +225,12 @@ These ran on Fable with conductor mode on from the first prompt, in the terminal
 - **Hook input.** At the first tool call of a session, a hook can read the model of the request from the transcript, and each request records its effort level under `params.output_config.effort`. `SessionStart` does not carry the model. `PostModelSwitch` carries the old and the new model when a session is resumed.
 - **Installation.** The plugin and its marketplace file validate, and the plugin installs from a marketplace.
 - **Codex runs.** Through `scripts/worker.py` in a throwaway git project: an `implementer` run on Sol and its resume with one added rule, which kept the session and the settings, and an `analyst` run on Astra in which a write to a project file failed, `curl` could not resolve its host with the network blocked, and the run's own `files/` folder was writable. Each result passed the conductor's review. The guard refused `claude -p` and let `ls` through.
-- **agy runs.** An `implementer` run on Hydrogen that passed review, its resume in the same conversation, and an `analyst` run on Neon that read the project, could not write it, and wrote its own folder. The guard refused a project write by the read-only role, and `claude -p`.
 - **A relay by hand,** before the script existed: the conductor wrote a task spec, Codex implemented it, the conductor ran Codex's tests and its own check before it read the report, and a clarification went back through a resume. The second round passed.
 - **The audit** on a real session's transcript found the one call that a hook had refused, and a task spec written before `orchestra:documentation` was loaded.
 
 ### Not yet exercised in a real session
 
-- A whole piece of work in Codex mode or in agy mode, run by a conductor in a new session and followed by the audit. Whether the implementation's tokens show on the other plan and not on the Claude plan.
+- A whole piece of work in Codex mode, run by a conductor in a new session and followed by the audit. Whether the implementation's tokens show on the Codex plan and not on the Claude plan.
 - `/orchestra:conduct` turning the mode on, a request on the same line reaching the conductor, an Opus conductor, the effort question, and whether the mode survives `/clear`.
 - A `haiku-editor` call that runs, a Haiku call from a subagent that implements, Haiku chosen on its own when the conditions hold and only then, and whether token use falls.
 - The interview asking for pre-approval and writing the line, a pre-approved command running without a prompt, a refusal leading the conductor to change the brief and ask, and a subagent refused and reporting `BLOCKED`.

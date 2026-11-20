@@ -2,7 +2,7 @@
 
 A Claude Code plugin that keeps the main model in the conductor role when you turn conductor mode on. The conductor, Fable or Opus, designs, delegates, and reviews independently. Opus and Sonnet subagents implement, and Haiku subagents take the work that needs no judgment. As the work goes on, the conductor keeps the project's documents small and true. The principles that need judgment live in the conductor's instructions. The principles that need no judgment are enforced by hooks.
 
-In two further modes the conductor hands the implementation to the Codex CLI, or to the Antigravity CLI with Gemini models, instead of Claude subagents. See "Workers on the Codex CLI or the Antigravity CLI".
+In one further mode the conductor hands the implementation to the Codex CLI instead of Claude subagents. See "Workers on the Codex CLI".
 
 Orchestra chooses the model and effort for the workers. You set the conductor's own effort: see "Usage".
 
@@ -70,7 +70,6 @@ Set the conductor's effort yourself using the control below the prompt input. Or
 | `/orchestra:conduct` | Turns conductor mode on for this chat |
 | `/orchestra:conductor` | Turns conductor mode on and loads the conductor's instructions right away. Use it on Fable or Opus: on another model it puts the instructions into a chat that stays ordinary |
 | `/orchestra:conduct-codex` | Turns conductor mode on with Codex CLI runs as the workers |
-| `/orchestra:conduct-agy` | Turns conductor mode on with Antigravity CLI runs, on Gemini models, as the workers |
 | `/orchestra:disable` | Turns conductor mode off for this chat, whichever mode was on. The chat works as an ordinary session |
 | `/orchestra:setup` | Checks the environment and lists the work folders. Changes nothing |
 
@@ -142,20 +141,20 @@ Part of the work needs no judgment: finding where something is, or making the sa
 
 No hook checks whether a request really needs no judgment, whether the editor stayed inside the files it was given, or whether the caller ran the check again. Those are instructions.
 
-## Workers on the Codex CLI or the Antigravity CLI
+## Workers on the Codex CLI
 
-`/orchestra:conduct-codex` and `/orchestra:conduct-agy` keep the conductor and its workflow, and change who implements. Each task is one run of the Codex CLI, or of the Antigravity CLI (`agy`) on a Gemini model. The implementation then spends the plan that CLI is signed in with instead of your Claude plan. The conductor still writes the brief and the task specs, reviews each result before it reads the report, and sends failed work back.
+`/orchestra:conduct-codex` keeps the conductor and its workflow, and changes who implements. Each task is one run of the Codex CLI. The implementation then spends the plan Codex is signed in with instead of your Claude plan. The conductor still writes the brief and the task specs, reviews each result before it reads the report, and sends failed work back.
 
-Requirements: the CLI of the mode, installed and signed in. The plugin changes nothing in its configuration and writes no setup file into your project.
+Requirements: the Codex CLI, installed and signed in. The plugin changes nothing in its configuration and writes no setup file into your project.
 
-| Role | Does | Codex model | agy model |
-|---|---|---|---|
-| `engineer` | Implementation that needs diagnosis or a decision inside the task's limits | GPT-6.2 Astra | Gemini 4 Neon |
-| `analyst` | Findings only. Changes no project file | GPT-6.2 Astra | Gemini 4 Neon |
-| `implementer` | A bounded change whose files, pattern and check the task spec names | GPT-6.2 Sol | Gemini 4 Hydrogen |
-| `writer` | A document whose outline and facts are settled | GPT-6.2 Sol | Gemini 4 Hydrogen |
+| Role | Does | Codex model |
+|---|---|---|
+| `engineer` | Implementation that needs diagnosis or a decision inside the task's limits | GPT-6.2 Astra |
+| `analyst` | Findings only. Changes no project file | GPT-6.2 Astra |
+| `implementer` | A bounded change whose files, pattern and check the task spec names | GPT-6.2 Sol |
+| `writer` | A document whose outline and facts are settled | GPT-6.2 Sol |
 
-- **The plugin's hooks step aside.** In these modes no hook guards the conductor, except the question about a low effort on Opus. The conductor keeps the same rules by its instructions alone, and says in its final report where it did not.
+- **The plugin's hooks step aside.** In this mode no hook guards the conductor, except the question about a low effort on Opus. The conductor keeps the same rules by its instructions alone, and says in its final report where it did not.
 - **Each run carries its own guard.** The conductor starts every run with `scripts/worker.py`, which passes the CLI a hook for that run only. The hook refuses what the plugin's hooks refuse a Claude subagent: a command of a pre-approval kind that the brief does not pre-approve, an edit to the conductor's documents, any project edit by the `analyst`, and starting a Claude session. It reads the command line and is a tripwire, not a sandbox. The CLI's own sandbox keeps `.git` read-only.
 - **The run is checked afterwards.** The script compares the changed files with the paths in the task spec, and warns about a change outside them, a change to git state, and a `DONE` report without a valid verification record. It prints a few lines and never the report's text.
 - **The network is open unless you block it.** The interview asks once. `Worker network: blocked` under `## Constraints` in the brief turns it off, which suits a repository whose code must not leave the machine.
@@ -185,14 +184,14 @@ These rules are instructions. No hook enforces them.
 
 | Kind | Name | Role |
 |---|---|---|
-| Skill | `orchestra:conduct` | Turns conductor mode on for the chat. `orchestra:conduct-codex` and `orchestra:conduct-agy` turn it on with CLI runs as the workers, and `orchestra:disable` turns it off. Only you can run them |
+| Skill | `orchestra:conduct` | Turns conductor mode on for the chat. `orchestra:conduct-codex` turns it on with Codex CLI runs as the workers, and `orchestra:disable` turns it off. Only you can run them |
 | Skill | `orchestra:setup` | Checks the environment and lists the work folders. Changes nothing. Only you can run it |
 | Skill | `orchestra:conductor` | The conductor's instructions. The conductor loads it when you turn conductor mode on, and again after the chat is compacted or cleared. A hook refuses every other tool call until it is loaded |
 | Skill | `orchestra:interview` | How the conductor finds out what you want before any work starts: one question per turn, each next question decided by your last answer, then the brief. It also asks which kinds of action you pre-approve for the work, which files the conductor may write itself, and whether the work may use a worktree when it needs one. The conductor loads it as soon as a request is work, before it asks you anything or takes any action for the request. No hook checks this |
 | Skill | `orchestra:delegation` | The rules for choosing the subagent and the effort level of each task. The conductor loads it before its first delegation, and a hook refuses a delegation until it is loaded |
 | Skill | `orchestra:documentation` | The rules for what the work writes into the project's documents and comments, and for changing or deleting documents each time a group of related tasks is done. The conductor loads it before its first task spec, and a hook refuses an implementation delegation until it is loaded |
-| Skill | `orchestra:cli-workers` | What changes for the conductor when its workers are CLI runs. Loaded in the Codex and agy modes, in place of `orchestra:delegation` |
-| Skill | `orchestra:codex`, `orchestra:agy` | The facts of each CLI, and the model each role runs on |
+| Skill | `orchestra:cli-workers` | What changes for the conductor when its workers are CLI runs. Loaded in the Codex mode, in place of `orchestra:delegation` |
+| Skill | `orchestra:codex` | The facts of the Codex CLI, and the model each role runs on |
 | Role file | `roles/*.md` | The instructions a CLI worker reads: one file per role, and the rules they share in `roles/shared.md` |
 | Script | `scripts/worker.py` | Starts, resumes and checks a CLI run, and lets you follow one |
 | Script | `scripts/audit.py` | Lists where a session's conductor broke, or tried to break, a rule the hooks guard |
@@ -205,7 +204,7 @@ These rules are instructions. No hook enforces them.
 
 ## Principles and how each is enforced
 
-The enforcement below applies in a conductor session whose workers are Claude subagents. With CLI workers the hooks step aside, and every row is an instruction. See "Workers on the Codex CLI or the Antigravity CLI".
+The enforcement below applies in a conductor session whose workers are Claude subagents. With CLI workers the hooks step aside, and every row is an instruction. See "Workers on the Codex CLI".
 
 | Principle | Enforcement | File |
 |---|---|---|

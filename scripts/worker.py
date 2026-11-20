@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a task on the Codex CLI or the Antigravity CLI for a conductor in a CLI mode, and check the run.
+"""Run a task on the Codex CLI for a conductor in a CLI mode, and check the run.
 
     worker.py run    --cli codex --task <task spec> --role <role> [--effort <level>]
     worker.py resume --task <task spec> --message <file>
@@ -34,7 +34,6 @@ Exit codes: 0 the run finished and nothing was flagged, 2 the run finished with 
 """
 import argparse
 import collections
-import hashlib
 import json
 import os
 import re
@@ -42,13 +41,11 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as c  # noqa: E402
 import check_report  # noqa: E402
-import worker_guard  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROLES_DIR = os.path.join(ROOT, "roles")
@@ -62,8 +59,7 @@ ROLES = {
 }
 
 # `engineer` and `analyst` start at `high`, `implementer` and `writer` at `medium`. For GPT-6.2 that
-# is one level above the guides' starting point for the latter two. For Gemini it is Google's own
-# default and its level for general coding.
+# is one level above the guides' starting point for the latter two.
 DEFAULT_EFFORT = {"engineer": "high", "analyst": "high", "implementer": "medium", "writer": "medium"}
 
 GUARD = os.path.join(ROOT, "scripts", "worker_guard.py")
@@ -178,103 +174,7 @@ class Codex:
         return session, usage
 
 
-class Agy:
-    """The Antigravity CLI, which runs Gemini models.
-
-    agy reads hooks only from a workspace's `.agents/hooks.json`, the user's global hooks and agy
-    plugins, and `--settings` refuses a `hooks` key. So each task gets a workspace folder of the
-    plugin's own, outside the project, which holds the guard's `.agents/hooks.json`; the run
-    starts there, and the folders the task may write are added with `--add-dir`. The sandbox stays
-    on. `permissions.allow` opens the network with `read_url(*)`, and for a read-only role mounts
-    the project for reading with `read_file(<project>)`.
-    """
-    name = "agy"
-    binary = "agy"
-    efforts = ("low", "medium", "high", "xhigh")
-    families = {"engineer": "neon", "analyst": "neon", "implementer": "hydrogen", "writer": "hydrogen"}
-    models = {role: "gemini-4-%s" % family for role, family in families.items()}
-    default_effort = DEFAULT_EFFORT
-
-    def model_id(self, s):
-        return "%s-%s" % (s["model"], s["effort"])  # agy names the effort in the model id
-
-    def prepare(self, s, paths):
-        digest = hashlib.sha1(paths["work_folder"].encode("utf-8")).hexdigest()[:12]
-        workspace = os.path.join(tempfile.gettempdir(), "orchestra-agy", digest, paths["task"])
-        os.makedirs(os.path.join(workspace, ".agents"), exist_ok=True)
-        with open(os.path.join(workspace, ".agents", "hooks.json"), "w", encoding="utf-8") as f:
-            json.dump({"orchestra-guard": {"PreToolUse": [{"matcher": "*", "hooks": [
-                {"type": "command", "command": guard_command(s), "timeout": 15}]}]}}, f, indent=2)
-        s["cwd"] = workspace
-        if s["kind"] == "impl":
-            s["add_dirs"], s["read_dirs"] = [paths["project"]], []
-        else:
-            s["add_dirs"], s["read_dirs"] = [paths["files"], os.path.dirname(paths["report"])], [paths["project"]]
-        s["writable_roots"] = s["add_dirs"]
-
-    def settings(self, s):
-        allow = ["read_url(*)"] if s["network"] else []
-        # The role files live in the plugin, outside the workspace. Without this rule the worker
-        # cannot read them: headless mode refuses a read_file it cannot ask about.
-        allow += ["read_file(%s)" % d for d in [ROLES_DIR] + list(s.get("read_dirs") or [])]
-        # stream-json writes one event per line as the run goes, so `worker.py watch` can follow it.
-        # Its last event, `result`, holds what `json` prints at the end.
-        args = ["--model", self.model_id(s), "--output-format", "stream-json", "--disable-slash-commands",
-                "--settings", json.dumps({"permissions": {"allow": allow}})]
-        for d in s.get("add_dirs") or []:
-            args += ["--add-dir", d]
-        return args
-
-    def run_command(self, s, last_message, prompt):
-        return [self.binary, "-p", prompt] + self.settings(s), b""
-
-    def resume_command(self, s, last_message, message):
-        return [self.binary, "-p", message, "--conversation", s["session_id"]] + self.settings(s), b""
-
-    def _result(self, path):
-        """The run's result: the `result` event of a stream, or the one object `json` prints."""
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read()
-        except OSError:
-            return {}
-        found = {}
-        for line in text.splitlines():
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
-                found = event["result"]
-            elif isinstance(event, dict) and not found and event.get("event") == "init" and event.get("conversation_id"):
-                found = {"conversation_id": event["conversation_id"]}  # a run cut short still has its id
-        if found:
-            return found
-        try:
-            data = json.loads(text)
-            return data if isinstance(data, dict) and "event" not in data else {}
-        except ValueError:
-            return {}
-
-    def read_events(self, path):
-        data = self._result(path)
-        usage = data.get("usage") if isinstance(data.get("usage"), dict) else None
-        if usage:
-            usage = {"input_tokens": usage.get("input_tokens", 0), "cached_input_tokens": usage.get("cache_read_tokens", 0),
-                     "output_tokens": usage.get("output_tokens", 0) + usage.get("thinking_tokens", 0)}
-        return (str(data["conversation_id"]) if data.get("conversation_id") else None), usage
-
-    def after_run(self, events, last_message):
-        """The result's `response` is the worker's last message."""
-        data = self._result(events)
-        text = data.get("response") or ""
-        if data.get("status") and data.get("status") != "SUCCESS":
-            text += "\n\n(agy status: %s%s)" % (data.get("status"), ": " + str(data.get("error")) if data.get("error") else "")
-        with open(last_message, "w", encoding="utf-8") as f:
-            f.write(text)
-
-
-CLIS = {"codex": Codex, "agy": Agy}
+CLIS = {"codex": Codex}
 
 
 # ---------------------------------------------------------------- the task
@@ -563,16 +463,11 @@ BASH_WRAP = re.compile(r"^\S*\b(?:ba|z)?sh -l?c (['\"])(.*)\1$", re.S)
 
 
 class EventReader:
-    """Turns a run's event stream, codex or agy, into lines for a person to follow."""
-
-    def __init__(self):
-        self.agy_text = {}  # agy streams a message in pieces, by step
+    """Turns a run's event stream into lines for a person to follow."""
 
     def lines(self, event):
         if not isinstance(event, dict):
             return []
-        if "event" in event:
-            return self.agy(event)
         return self.codex(event)
 
     def codex(self, e):
@@ -604,37 +499,9 @@ class EventReader:
             return ["tool   %s %s" % (it, short(item.get("query") or item.get("tool") or "", 120))]
         return []
 
-    def agy(self, e):
-        kind = e.get("event")
-        if kind == "init":
-            return ["start  conversation %s, %s" % (e.get("conversation_id"), (e.get("init") or {}).get("model", ""))]
-        if kind == "result":
-            r = e.get("result") or {}
-            u = r.get("usage") or {}
-            return ["end    %s, tokens in %s, out %s" % (r.get("status"), format(u.get("input_tokens", 0), ","), format(u.get("output_tokens", 0), ","))]
-        step = e.get("step_update") if isinstance(e.get("step_update"), dict) else {}
-        kind, state, index = step.get("step_type"), step.get("state"), step.get("step_index")
-        if kind == "agent_response":
-            self.agy_text[index] = self.agy_text.get(index, "") + str(step.get("text_delta") or "")
-            if state == "DONE":
-                text = self.agy_text.pop(index, "").strip()
-                return ["say    %s" % short(text, 400)] if text else []
-            return []
-        if kind == "tool" and state == "ACTIVE":
-            info = step.get("tool_info") or {}
-            params = info.get("parameters") if isinstance(info.get("parameters"), dict) else {}
-            name = step.get("tool_name") or info.get("name") or "?"
-            if params.get("CommandLine"):
-                return ["$      %s" % short(params["CommandLine"])]
-            target = next((params[k] for k in worker_guard.AGY_TARGET_KEYS if params.get(k)), "")
-            return ["%-6s %s" % ("edit" if worker_guard.WRITE_TOOL.search(name) else "tool", short("%s %s" % (name, target)))]
-        if state not in (None, "ACTIVE", "DONE"):
-            return ["%-6s step %s %s %s" % ("ERROR" if "ERR" in str(state) else "", index, kind, state)]
-        return []
-
 
 def activity_line(r):
-    return "%-6s %s %s" % ("GUARD" if r.get("refused") else "call", r.get("tool"), short(called(r) or r.get("target") or ""))
+    return "%-6s %s %s" % ("GUARD" if r.get("refused") else "call", r.get("tool"), short(called(r)))
 
 
 class Tail:

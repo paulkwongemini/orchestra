@@ -3,8 +3,8 @@
 
 Run: python3 tests/test_worker.py
 
-A fake `codex` and a fake `agy` on the PATH record how they were called and act out a plan: which
-files they write, which report and last message they leave, what they print, and their exit code.
+A fake `codex` on the PATH records how it was called and acts out a plan: which files it writes,
+which report and last message it leaves, what it prints, and its exit code.
 No model is called.
 """
 import json
@@ -17,7 +17,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from support import BRIEF, REPORT_DONE, REPORT_PATH, ROOT, SPEC_PATH, STATUS_DONE, TASK, UNIT, ProjectTest
 
-# Both fakes start by logging the call and writing the plan's files.
+# The fake starts by logging the call and writing the plan's files.
 FAKE_START = textwrap.dedent('''\
     #!/usr/bin/env python3
     import json, os, sys, time
@@ -46,21 +46,6 @@ FAKE_CODEX = FAKE_START + textwrap.dedent('''\
     sys.exit(plan.get("exit", 0))
 ''')
 
-FAKE_AGY = FAKE_START + textwrap.dedent('''\
-    conv = plan.get("session", "conv-1")
-    print(json.dumps({"event": "init", "conversation_id": conv, "init": {"model": "gemini-4-hydrogen-medium"}}))
-    step = lambda **kw: print(json.dumps({"event": "step_update", "step_update": dict(conversation_id=conv, **kw)}))
-    step(step_index=1, state="ACTIVE", step_type="tool", tool_name="run_command", tool_info={"name": "run_command", "parameters": {"CommandLine": "pytest tests/login"}})
-    step(step_index=2, state="ACTIVE", step_type="agent_response", text_delta="Tests pass; ")
-    step(step_index=2, state="DONE", step_type="agent_response", text_delta="writing the report.")
-    print(json.dumps({"event": "result", "result": {"conversation_id": conv, "status": plan.get("status", "SUCCESS"),
-                      "response": plan.get("last", ""), "num_turns": 1, "duration_seconds": 1.0,
-                      "usage": {"input_tokens": 15684, "output_tokens": 639, "thinking_tokens": 215,
-                                "cache_read_tokens": 18349, "total_tokens": 16323}}}))
-    sys.exit(plan.get("exit", 0))
-''')
-
-
 class WorkerTest(ProjectTest):
     def setUp(self):
         super().setUp()
@@ -68,11 +53,10 @@ class WorkerTest(ProjectTest):
         self.codex_home = os.path.join(self.tmp, "codex-home")
         for d in (self.bin, self.codex_home):
             os.makedirs(d)
-        for name, text in (("codex", FAKE_CODEX), ("agy", FAKE_AGY)):
-            fake = os.path.join(self.bin, name)
-            with open(fake, "w", encoding="utf-8") as f:
-                f.write(text)
-            os.chmod(fake, 0o755)
+        fake = os.path.join(self.bin, "codex")
+        with open(fake, "w", encoding="utf-8") as f:
+            f.write(FAKE_CODEX)
+        os.chmod(fake, 0o755)
         with open(os.path.join(self.codex_home, "config.toml"), "w", encoding="utf-8") as f:
             f.write('model = "gpt-6.2-astra"\n[mcp_servers.node_repl]\ncommand = "x"\n[mcp_servers."my.server"]\ncommand = "y"\n')
         self.log = os.path.join(self.tmp, "calls.jsonl")
@@ -301,11 +285,9 @@ class WorkerTest(ProjectTest):
         cases = [  # the arguments after `run`, and what the refusal says
             ((), {"role": "tester"}, "Unknown role"),
             (("--effort", "huge"), {"role": "engineer"}, "Unknown effort"),
-            (("--effort", "max"), {"role": "engineer", "cli": "agy"}, "Unknown effort `max` for agy"),
             ((), {"role": "engineer", "cli": "other"}, "Unknown CLI"),
             ((), {"role": "engineer", "task": os.path.join(self.proj, "src/login.py")}, "is not a task spec"),
             ((), {"role": "engineer", "cli": "codex", "path": self.tmp}, "`codex` is not on the PATH"),
-            ((), {"role": "engineer", "cli": "agy", "path": self.tmp}, "`agy` is not on the PATH"),
         ]
         for extra, named, text in cases:
             with self.subTest(text):
@@ -327,89 +309,7 @@ class WorkerTest(ProjectTest):
         self.assertEqual(code, 1)
         self.assertIn("is not under this work folder's `reports/`", out)
 
-    # ---- agy
-
-    def agy_settings(self, argv):
-        return json.loads(self.option(argv, "--settings")[0])
-
-    def test_an_agy_implementation_run(self):
-        code, out = self.run_task(cli="agy")
-        self.assertEqual(code, 0, out)
-        call = self.calls()[0]
-        argv = call["argv"]
-        self.assertEqual(argv[0], "-p")
-        for text in (os.path.join(ROOT, "roles", "implementer.md"), os.path.realpath(self.spec), REPORT_PATH):
-            self.assertIn(text, argv[1])
-        self.assertEqual(call["stdin"], "")
-        self.assertEqual(self.option(argv, "--model"), ["gemini-4-hydrogen-medium"])
-        self.assertEqual(self.option(argv, "--output-format"), ["stream-json"])
-        self.assertIn("--disable-slash-commands", argv)
-        self.assertEqual(self.option(argv, "--add-dir"), [os.path.realpath(self.proj)])
-        self.assertEqual(self.agy_settings(argv), {"permissions": {"allow": ["read_url(*)", "read_file(%s)" % os.path.join(ROOT, "roles")]}})
-        workspace = call["cwd"]
-        self.assertFalse(workspace.startswith(os.path.realpath(self.proj)))
-        with open(os.path.join(workspace, ".agents", "hooks.json"), encoding="utf-8") as f:
-            hooks = json.load(f)
-        handler = hooks["orchestra-guard"]["PreToolUse"][0]
-        self.assertEqual(handler["matcher"], "*")
-        self.assertIn("worker_guard.py", handler["hooks"][0]["command"])
-        self.assertIn(self.record("guard.json"), handler["hooks"][0]["command"])
-        self.assertIn("TASK T01 | agy gemini-4-hydrogen medium |", out)
-        self.assertIn("SESSION: conv-1", out)
-        self.assertIn("STATUS: DONE", out)
-        self.assertIn("tokens in 15,684 (cached 18,349), out 854", out)
-        self.assertEqual(self.read_record("last-message-1.md"), STATUS_DONE)
-
-    def test_an_agy_analyst_reads_the_project_and_writes_only_its_folders(self):
-        self.plan({"write": {REPORT_PATH: REPORT_DONE}, "last": STATUS_DONE})
-        code, out = self.run_task("--effort", "xhigh", role="analyst", cli="agy")
-        self.assertEqual(code, 0, out)
-        argv = self.calls()[0]["argv"]
-        self.assertEqual(self.option(argv, "--model"), ["gemini-4-neon-xhigh"])
-        work = os.path.realpath(os.path.join(self.proj, UNIT))
-        self.assertEqual(self.option(argv, "--add-dir"), [os.path.join(work, "files", "T01"), os.path.join(work, "reports")])
-        self.assertEqual(self.agy_settings(argv)["permissions"]["allow"],
-                         ["read_url(*)", "read_file(%s)" % os.path.join(ROOT, "roles"), "read_file(%s)" % os.path.realpath(self.proj)])
-
-    def test_agy_with_the_network_blocked(self):
-        self.write(UNIT + "/brief.md", "## Constraints\nWorker network: blocked\n")
-        self.run_task(cli="agy")
-        self.assertEqual(self.agy_settings(self.calls()[0]["argv"]), {"permissions": {"allow": ["read_file(%s)" % os.path.join(ROOT, "roles")]}})
-
-    def test_an_agy_resume(self):
-        self.run_task(role="engineer", cli="agy")
-        message = self.write(UNIT + "/files/T01/rework-1.md", "Fix the expired-token case.\n")
-        code, out = self.worker("resume", "--task", self.spec, "--message", message)
-        self.assertEqual(code, 0, out)
-        first, second = self.calls()
-        self.assertEqual(second["argv"][:2], ["-p", "Fix the expired-token case."])
-        self.assertEqual(self.option(second["argv"], "--conversation"), ["conv-1"])
-        for opt in ("--model", "--add-dir", "--settings"):
-            self.assertEqual(self.option(second["argv"], opt), self.option(first["argv"], opt), opt)
-        self.assertEqual(second["cwd"], first["cwd"])
-
-    def test_an_agy_run_that_fails(self):
-        self.plan({"status": "ERROR", "last": "", "exit": 1})
-        code, out = self.run_task(cli="agy")
-        self.assertEqual(code, 1, out)
-        self.assertIn("agy status: ERROR", self.read_record("last-message-1.md"))
-
     # ---- watch
-
-    def test_watch_shows_an_agy_run(self):
-        self.run_task(cli="agy")
-        self.assertEqual(self.read_record("live.json")["round"], 1)
-        with open(self.record("guard.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"at": time.time(), "tool": "run_command", "command": "git push",
-                                "paths": [], "reason": "Pushing needs a key. More."}) + "\n")
-        code, out = self.worker("watch", "--task", self.spec, "--no-follow")
-        self.assertEqual(code, 0, out)
-        for text in ("start  conversation conv-1", "$      pytest tests/login", "say    Tests pass; writing the report.",
-                     "end    SUCCESS", "GUARD  refused run_command `git push`: Pushing needs a key"):
-            self.assertIn(text, out)
-        code, out = self.worker("watch", "--task", self.spec)  # the run is over, so following stops at once
-        self.assertEqual(code, 0, out)
-        self.assertIn("The run is over", out)
 
     def test_watch_shows_a_codex_run(self):
         self.run_task()
@@ -417,6 +317,15 @@ class WorkerTest(ProjectTest):
         self.assertEqual(code, 0, out)
         self.assertIn("start  session sess-1", out)
         self.assertIn("end    tokens in 16,541, out 812", out)
+        with open(self.record("guard.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps({"at": time.time(), "tool": "Bash", "command": "git push",
+                                "paths": [], "reason": "Pushing needs a key. More."}) + "\n")
+        code, out = self.worker("watch", "--task", self.spec, "--no-follow")
+        self.assertEqual(code, 0, out)
+        self.assertIn("GUARD  refused Bash `git push`: Pushing needs a key", out)
+        code, out = self.worker("watch", "--task", self.spec)  # the run is over, so following stops at once
+        self.assertEqual(code, 0, out)
+        self.assertIn("The run is over", out)
 
     def test_watch_before_any_run(self):
         code, out = self.worker("watch", "--task", self.spec, "--no-follow")
