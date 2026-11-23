@@ -202,6 +202,24 @@ class WorkerTest(ProjectTest):
         self.assertIn("WARN: Changed outside the paths under `## Scope and limits`: src/other.py", out)
         self.assertNotIn("test_a.py", out.split("WARN")[1])
 
+    def test_a_project_file_that_gains_a_reference_to_the_work_folder_is_flagged(self):
+        self.write("tests/login/test_a.py", "# see .orchestra/notes/old.md\n")
+        shot = 'page.save_screenshot("%s/files/T01/login.png")\n' % UNIT
+        self.plan({"write": {"src/login.py": "new\n",
+                             "tests/login/test_a.py": "# see .orchestra/notes/old.md\nx = 1\n" + shot,
+                             REPORT_PATH: REPORT_DONE}, "last": STATUS_DONE})
+        code, out = self.run_task()
+        self.assertEqual(code, 2, out)
+        self.assertIn("WARN: Lines naming `.orchestra/` were added to project files: tests/login/test_a.py:3.", out)
+
+    def test_a_reference_the_file_had_before_the_run_is_not_flagged(self):
+        self.write("tests/login/test_a.py", "# see .orchestra/notes/old.md\n")
+        self.plan({"write": {"src/login.py": "new\n", "tests/login/test_a.py": "x = 1\n# see .orchestra/notes/old.md\n",
+                             REPORT_PATH: REPORT_DONE}, "last": STATUS_DONE})
+        code, out = self.run_task()
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("WARN", out)
+
     def other_run(self, task, scope, started, edits=(), ended=None):
         """Another run's record in the same project: live.json, its guard's log of edits, and run.json once over."""
         spec = self.write("%s/tasks/%s-x.md" % (UNIT, task), TASK.replace("`src/login.py` and the tests in `tests/login/`", scope)

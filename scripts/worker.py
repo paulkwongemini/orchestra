@@ -19,6 +19,7 @@ each point that a check after the run can see:
 
   - a file changed outside the paths under the task spec's `## Scope and limits`
   - a change under `.orchestra/` other than the task's report and its `files/<task>/` folder
+  - a line naming `.orchestra/` added to a project file, which then depends on a git-ignored folder
   - a change to git state
   - a `DONE` report without a valid verification record, or no report at all
 
@@ -73,6 +74,11 @@ GUARD = os.path.join(ROOT, "scripts", "worker_guard.py")
 
 # Folders whose changes say nothing about the work: tool caches and the like.
 SKIP_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "node_modules", ".venv", "venv"}
+
+# A project file that names this depends on a folder that git ignores and only this machine has.
+ORCHESTRA_REF = b".orchestra/"
+# Larger files are not read for it: they are data or build output, not code a worker writes.
+REF_MAX_BYTES = 1 << 20
 
 TASK_PATH = re.compile(r"^(?P<project>.*)/\.orchestra/(?P<work>[^/]+)/tasks/(?P<file>(?P<id>T\d+)[^/]*\.md)$")
 LIMIT_WORDS = re.compile(r"usage limit|rate limit|quota|too many requests|limit reached|upgrade your plan", re.I)
@@ -376,13 +382,53 @@ def git_state(project):
     return out
 
 
+def reference_lines(path):
+    """The lines of a text file that name `.orchestra/`, as (line number, stripped line)."""
+    try:
+        if os.path.getsize(path) > REF_MAX_BYTES:
+            return []
+        with open(path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return []
+    if ORCHESTRA_REF not in data or b"\0" in data:
+        return []
+    return [(n, line.strip()) for n, line in enumerate(data.splitlines(), 1) if ORCHESTRA_REF in line]
+
+
+def references(project):
+    """Each project file outside `.orchestra/` with the lines in it that name `.orchestra/`."""
+    refs = {}
+    for top, dirs, names in os.walk(project):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not (top == project and d == c.ORCHESTRA_DIR)]
+        for name in names:
+            path = os.path.join(top, name)
+            found = reference_lines(path)
+            if found:
+                refs[os.path.relpath(path, project)] = collections.Counter(line for _n, line in found)
+    return refs
+
+
+def added_references(project, files, before):
+    """`path:line` for each line naming `.orchestra/` that a file has more of than it had before the run."""
+    added = []
+    for rel in files:
+        left = collections.Counter(before.get(rel, {}))
+        for n, line in reference_lines(os.path.join(project, rel)):
+            if left[line] > 0:
+                left[line] -= 1
+            else:
+                added.append("%s:%d" % (rel, n))
+    return added
+
+
 def changed(before, after):
     return sorted(p for p in set(before) | set(after) if before.get(p) != after.get(p))
 
 
 # ---------------------------------------------------------------- one run
 
-Outcome = collections.namedtuple("Outcome", "code elapsed started events errors changes git_changed")
+Outcome = collections.namedtuple("Outcome", "code elapsed started events errors changes git_changed references")
 
 
 def execute(cli, cmd, cwd, stdin, paths, round_no, s=None):
@@ -391,6 +437,7 @@ def execute(cli, cmd, cwd, stdin, paths, round_no, s=None):
     events = os.path.join(record, "events-%d.jsonl" % round_no)
     errors = os.path.join(record, "stderr-%d.txt" % round_no)
     before, git_before = snapshot(paths["project"]), git_state(paths["project"])
+    refs_before = references(paths["project"])
     started = time.time()
     live = {"round": round_no, "started": started, "cli": cli.name, "pid": os.getpid()}  # for `watch` and `board`
     live.update({k: (s or {}).get(k) for k in ("role", "kind", "model", "effort")})
@@ -404,7 +451,7 @@ def execute(cli, cmd, cwd, stdin, paths, round_no, s=None):
         raise Fail("`%s` could not be started: %s" % (cmd[0], e))
     elapsed = time.time() - started
     after, git_after = snapshot(paths["project"]), git_state(paths["project"])
-    return Outcome(code, elapsed, started, events, errors, changed(before, after), git_before != git_after)
+    return Outcome(code, elapsed, started, events, errors, changed(before, after), git_before != git_after, refs_before)
 
 
 def report_lines(cli, s, paths, outcome):
@@ -468,6 +515,11 @@ def report_lines(cli, s, paths, outcome):
         outside = [p for p in project_files if not in_scope(p, scope)]
         if outside:
             warnings.append("Changed outside the paths under `## Scope and limits`: %s" % ", ".join(outside))
+    added = added_references(paths["project"], project_files, outcome.references)
+    if added:
+        warnings.append("Lines naming `.orchestra/` were added to project files: %s. A project file must not depend on "
+                        "the work folder, and capture for a review belongs in a script under `files/<task>/`."
+                        % ", ".join(added[:20] + (["and %d more" % (len(added) - 20)] if len(added) > 20 else [])))
     if s["kind"] == "readonly" and project_files:
         warnings.append("A read-only role changed project files: %s" % ", ".join(project_files))
     if outcome.git_changed:
